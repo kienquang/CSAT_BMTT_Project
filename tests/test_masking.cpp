@@ -49,7 +49,7 @@ int main() {
     cout << "Before: " << salary1 << endl;
     MaskingLogic::PrintBuffer(salary1, "SALARY_BEFORE");
     
-    MaskingLogic::MaskSalary(salary1, 20);
+    MaskingLogic::MaskToThreeStar(salary1, user, 20);
     cout << "After:  " << salary1 << endl;
     MaskingLogic::PrintBuffer(salary1, "SALARY_AFTER");
     

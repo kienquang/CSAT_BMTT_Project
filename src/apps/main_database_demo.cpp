@@ -3,6 +3,7 @@
 #include <cstring>
 #include "DatabaseHelper.h"
 #include "Blowfish.h"
+#include "EncryptionConfig.h"
 
 using namespace std;
 
@@ -10,21 +11,21 @@ using namespace std;
 
 void DisplayEmployee(const nhanvien& emp) {
     cout << "\n┌─────────────────────────────────────────────────┐" << endl;
-    cout << "│ THÔNG TIN NHÂN VIÊN" << endl;
+    cout << "│ THONG TIN NHAN VIEN" << endl;
     cout << "├─────────────────────────────────────────────────┤" << endl;
     cout << "│ ID:          " << emp.id << endl;
-    cout << "│ Tên:         " << emp.ten_nv << endl;
-    cout << "│ Vai trò:     " << emp.vai_tro << endl;
+    cout << "│ Ten:         " << emp.ten_nv << endl;
+    cout << "│ Vai tro:     " << emp.vai_tro << endl;
     cout << "│ CCCD (HEX):  " << emp.cccd_cipher << endl;
     cout << "│ SDT (HEX):   " << emp.sdt_cipher << endl;
-    cout << "│ Lương (HEX): " << emp.luong_cipher << endl;
+    cout << "│ Luong (HEX): " << emp.luong_cipher << endl;
     cout << "└─────────────────────────────────────────────────┘\n" << endl;
 }
 
 void TestEncryptionDecryption() {
     cout << "\n========== TEST ENCRYPTION/DECRYPTION ==========" << endl;
     
-    Blowfish cipher("MatMaHoc@NIST2025");
+    Blowfish cipher(EncryptionConfig::BLOWFISH_KEY);
     
     // Test data
     string plaintext = "001202037855";
@@ -73,6 +74,7 @@ void InsertDummyData(DatabaseHelper& dbHelper) {
             dummies[i].role,
             dummies[i].cccd,
             dummies[i].phone,
+            "Default123",
             dummies[i].salary
         );
         
@@ -144,10 +146,13 @@ int main() {
                 getline(cin, cccd);
                 cout << "Số điện thoại (10 số): ";
                 getline(cin, phone);
-                cout << "Lương: ";
+                cout << "Mat khau: ";
+                string password;
+                getline(cin, password);
+                cout << "Luong: ";
                 getline(cin, salary);
                 
-                if (dbHelper.InsertNhanVien(name, role, cccd, phone, salary)) {
+                if (dbHelper.InsertNhanVien(name, role, cccd, phone, password, salary)) {
                     cout << "✓ Thêm thành công!" << endl;
                 } else {
                     cout << "✗ Lỗi khi thêm!" << endl;
@@ -162,11 +167,11 @@ int main() {
                 cin >> id;
                 
                 nhanvien emp;
-                if (dbHelper.GetNhanVienById(id, emp)) {
+                if (dbHelper.GetNhanVienByIdWithRole(id, emp, "Admin")) {
                     DisplayEmployee(emp);
                     
                     // Giải mã để hiển thị plaintext
-                    Blowfish cipher("MatMaHoc@NIST2025");
+                    Blowfish cipher(EncryptionConfig::BLOWFISH_KEY);
                     string cccdPlain = cipher.DecryptString(emp.cccd_cipher);
                     string sdtPlain = cipher.DecryptString(emp.sdt_cipher);
                     string luongPlain = cipher.DecryptString(emp.luong_cipher);
@@ -188,7 +193,7 @@ int main() {
                 cin >> id;
                 cin.ignore();
                 
-                string name, role, cccd, phone, salary;
+                string name, role, cccd, phone, password, salary;
                 cout << "Tên: ";
                 getline(cin, name);
                 cout << "Vai trò: ";
@@ -197,10 +202,12 @@ int main() {
                 getline(cin, cccd);
                 cout << "SĐT: ";
                 getline(cin, phone);
+                cout << "Mật khẩu: ";
+                getline(cin, password);
                 cout << "Lương: ";
                 getline(cin, salary);
                 
-                if (dbHelper.UpdateNhanVien(id, name, role, cccd, phone, salary)) {
+                if (dbHelper.UpdateNhanVien(id, name, role, cccd, phone, password, salary)) {
                     cout << "✓ Cập nhật thành công!" << endl;
                 } else {
                     cout << "✗ Lỗi cập nhật!" << endl;
@@ -234,7 +241,7 @@ int main() {
 
             case 8: {
                 cout << "\n[ACTION] Lấy tất cả nhân viên" << endl;
-                vector<nhanvien> employees = dbHelper.GetAllNhanVien();
+                vector<nhanvien> employees = dbHelper.GetAllNhanVienWithRole("Admin");
                 
                 if (employees.size() == 0) {
                     cout << "Không có dữ liệu trong bảng!" << endl;

@@ -4,8 +4,8 @@
 #include <cstring>
 
 // ======== SHARED NETWORK PACKET DEFINITION ========
-// Sử dụng cho giao tiếp giữa TCP_Client và TCP_Server
-// Kích thước cố định: 64 bytes (pragma pack để không padding)
+// Su dung cho giao tiep giua TCP_Client va TCP_Server
+// Kich thuoc co dinh: 64 bytes (pragma pack de khong padding)
 
 #pragma pack(1)
 

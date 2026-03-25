@@ -3,38 +3,59 @@
 
 #include <cstring>
 #include <iostream>
+#include <string>
 
 using namespace std;
 
+// ======== ENUM DINH NGHIA VAI TRO ========
+enum class UserRole {
+    ADMIN,  // Admin: Co quyen xem du lieu goc (plaintext)
+    USER    // User: Chi xem du lieu da mask
+};
+
 // ======== MASKING UTILITY MODULE ========
-// Hàm này kiểm soát che giấu dữ liệu nhạy cảm trước khi gửi cho User
-// TUYỆT ĐỐI không dùng <regex> - chỉ dùng vòng lặp for
-// Ghi đè trực tiếp bộ đệm cục bộ với dấu sao '*'
+// Ham nay kiem soat che giau du lieu nhay cam truoc khi gui cho User
+// TUYET DOI khong dung <regex> - chi dung vong lap for
+// Ghi de truc tiep bo dem cuc bo voi dau sao '*'
 
 class MaskingLogic {
 public:
-    // ======== HÀM CHE GIẤU PHỔ BIẾN ========
+    // ======== HAM CHE GIAU PHO BIEN (KHONG TON ROLE) ========
     
-    // Che giấu số điện thoại: "0912345678" → "091****678"
-    // Tham số: buffer = con trỏ tới mảng char chứa SĐT plaintext
-    // Kích thước: 20 bytes chuẩn từ NetworkData.h
-    // Hành động: Ghi đè các ký tự nhạy cảm bằng '*' trực tiếp trên buffer
+    // Che giau so dien thoai: "0912345678" → "091****678"
+    // Tham so: buffer = con tro toi mang char chua SDT plaintext
+    // Kich thuoc: 20 bytes chuan tu NetworkData.h
+    // Hanh dong: Ghi de cac ky tu nhay cam bang '*' truc tiep tren buffer
     static void MaskPhone(char* buffer, size_t bufferSize = 20);
 
-    // Che giấu CCCD: "001202037855" → "0012***7855"
-    // Tương tự maskPhone nhưng cho CCCD (12 chữ số)
+    // Che giau CCCD: "001202037855" → "0012***7855"
+    // Tuong tu maskPhone nhung cho CCCD (12 chu so)
     static void MaskCCCD(char* buffer, size_t bufferSize = 20);
 
-    // Che giấu Lương (4 chữ số cuối): "50000000" → "5000****"
-    static void MaskSalary(char* buffer, size_t bufferSize = 20);
+    // Che giau thành 3 ky tu '*': "50000000" → "***"
+    static void MaskToThreeStar(char* buffer, UserRole role, size_t bufferSize = 20);
 
-    // ======== HÀM KIỂM CHỨNG ========
+    // ======== HAM CHE GIAU THEO VAI TRO (ROLE-BASED) ========
+    
+    // Che giau CCCD theo vai tro: Admin → plaintext, User → mask all "****037855"
+    static void MaskCCCDByRole(char* buffer, UserRole role, size_t bufferSize = 20);
 
-    // Kiểm tra xem buffer có chứa dữ liệu đã được mô phỏng không
-    // Return: true nếu phát hiện '*', false nếu dữ liệu gốc
+    // Che giau SDT theo vai tro: Admin → plaintext, User → "09****5678"
+    static void MaskPhoneByRole(char* buffer, UserRole role, size_t bufferSize = 20);
+
+    // Che giau theo vai tro: Admin → plaintext, User → "***"
+    static void MaskToThreeStarByRole(char* buffer, UserRole role, size_t bufferSize = 20);
+
+    // ======== HAM UTILITY ========
+
+    // Chuyen string role thanh enum
+    static UserRole StringToRole(const string& roleStr);
+
+    // Kiem tra xem buffer co chua du lieu da duoc mo phong khong
+    // Return: true neu phat hien '*', false neu du lieu goc
     static bool IsAlreadyMasked(const char* buffer);
 
-    // In ra buffer để debug
+    // In ra buffer de debug
     static void PrintBuffer(const char* buffer, const char* label);
 };
 

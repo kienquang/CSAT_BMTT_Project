@@ -7,8 +7,8 @@
 
 struct PacketData {
     // [0-3] User Role
-    int userRole;              // 1 = Admin (nhận plaintext sau decrypt)
-                               // 2 = User  (nhận masked data)
+    int userRole;              // 1 = Admin (nhan plaintext sau decrypt)
+                               // 2 = User  (nhan masked data)
 
     // [4-7] Request Type
     int requestType;           // 1 = Query CCCD

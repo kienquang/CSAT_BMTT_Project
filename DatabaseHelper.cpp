@@ -2,6 +2,7 @@
 #include <iostream>
 #include <sstream>
 #include <cstring>
+#include "EncryptionConfig.h"
 
 // MySQL Connector/C++ includes
 #include "mysql_connection.h"
@@ -19,7 +20,7 @@ DatabaseHelper::DatabaseHelper(const string& host, int port,
                                const string& database)
     : HOST(host), PORT(port), USER(user), PASSWORD(password), 
       DATABASE(database), connection(nullptr) {
-    // Khởi tạo từng trường
+    // Khoi tao tung truong
 }
 
 DatabaseHelper::~DatabaseHelper() {
@@ -36,11 +37,11 @@ bool DatabaseHelper::Connect() {
         sql::Connection* conn = (sql::Connection*)connection;
         conn->setSchema(DATABASE);
         
-        cout << "[DATABASE] Đã kết nối tới MySQL: " << HOST << ":" << PORT << " [DB: " << DATABASE << "]" << endl;
+        cout << "[DATABASE] Da ket noi toi MySQL: " << HOST << ":" << PORT << " [DB: " << DATABASE << "]" << endl;
         return true; 
     } 
     catch (exception& e) {
-        cerr << "[ERROR] Lỗi kết nối MySQL: " << e.what() << endl;
+        cerr << "[ERROR] Loi ket noi MySQL: " << e.what() << endl;
         return false;
     }
 }
@@ -54,7 +55,7 @@ void DatabaseHelper::Disconnect() {
         sql::Connection* conn = (sql::Connection*)connection;
         delete conn;
         connection = nullptr;
-        cout << "[DATABASE] Đã ngắt kết nối" << endl;
+        cout << "[DATABASE] Da ngan ket noi" << endl;
     }
 }
 
@@ -62,7 +63,7 @@ void DatabaseHelper::Disconnect() {
 
 bool DatabaseHelper::ExecuteQuery(const string& query) {
     if (!IsConnected()) {
-        cerr << "[ERROR] Không kết nối được với database" << endl;
+        cerr << "[ERROR] Khong ket noi duoc voi database" << endl;
         return false;
     }
 
@@ -72,11 +73,11 @@ bool DatabaseHelper::ExecuteQuery(const string& query) {
         stmt->execute(query);
         delete stmt;
         
-        cout << "[DATABASE] Thực thi query: " << query.substr(0, 50) << "..." << endl;
+        cout << "[DATABASE] Thuc thi query: " << query.substr(0, 50) << "..." << endl;
         return true;
     }
-    catch (exception& e) {
-        cerr << "[ERROR] Lỗi thực thi query: " << e.what() << endl;
+    catch (sql::SQLException &e) {
+        cerr << "[ERROR] Loi thuc thi query: " << e.what() << endl;
         return false;
     }
 }
@@ -121,7 +122,7 @@ bool DatabaseHelper::InsertNhanVien(const string& ten_nv, const string& vai_tro,
     }
 
     // STEP 1: Mã hóa plaintext thành HEX bằng Blowfish
-    Blowfish cipher("MatMaHoc@NIST2025");
+    Blowfish cipher(EncryptionConfig::BLOWFISH_KEY);
     
     string cccd_hex = cipher.EncryptString(cccd_plaintext);
     string sdt_hex = cipher.EncryptString(sdt_plaintext);
@@ -129,11 +130,13 @@ bool DatabaseHelper::InsertNhanVien(const string& ten_nv, const string& vai_tro,
 
     // STEP 2: Xây dựng câu SQL INSERT
     stringstream ss;
-    ss << "INSERT INTO NhanVien (ten_nv, vai_tro, cccd_cipher, sdt_cipher, luong_cipher) "
+    ss << "INSERT INTO NhanVien (ten_nv, vai_tro, cccd, cccd_cipher, sdt, sdt_cipher, luong_cipher) "
        << "VALUES ('"
        << ten_nv << "', '"
        << vai_tro << "', '"
+       << cccd_plaintext << "', '"
        << cccd_hex << "', '"
+       << sdt_plaintext << "', '"
        << sdt_hex << "', '"
        << luong_hex << "');";
     
@@ -284,7 +287,7 @@ bool DatabaseHelper::UpdateNhanVien(int id, const string& ten_nv, const string& 
     }
 
     // STEP 1: Mã hóa plaintext
-    Blowfish cipher("MatMaHoc@NIST2025");
+    Blowfish cipher(EncryptionConfig::BLOWFISH_KEY);
     string cccd_hex = cipher.EncryptString(cccd_plaintext);
     string sdt_hex = cipher.EncryptString(sdt_plaintext);
     string luong_hex = cipher.EncryptString(luong_plaintext);
@@ -294,7 +297,9 @@ bool DatabaseHelper::UpdateNhanVien(int id, const string& ten_nv, const string& 
     ss << "UPDATE NhanVien SET "
        << "ten_nv = '" << ten_nv << "', "
        << "vai_tro = '" << vai_tro << "', "
+       << "cccd = '" << cccd_plaintext << "', "
        << "cccd_cipher = '" << cccd_hex << "', "
+       << "sdt = '" << sdt_plaintext << "', "
        << "sdt_cipher = '" << sdt_hex << "', "
        << "luong_cipher = '" << luong_hex << "' "
        << "WHERE id = " << id << ";";

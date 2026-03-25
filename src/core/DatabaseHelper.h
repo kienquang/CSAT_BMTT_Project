@@ -4,17 +4,20 @@
 #include <string>
 #include <vector>
 #include "Blowfish.h"
+#include "MaskingLogic.h"
+#include "EncryptionConfig.h"
 
 using namespace std;
 
-// Struct đại diện cho một nhân viên trong database
+// Struct dai dien cho mot nhan vien trong database
 struct nhanvien {
-    int id;                      // ID (auto-increment từ MySQL)
-    string ten_nv;               // Tên nhân viên (plaintext)
-    string vai_tro;              // Vai trò: "Admin" hoặc "User"
-    string cccd_cipher;          // CCCD được mã hóa (HEX format)
-    string sdt_cipher;           // Số điện thoại được mã hóa (HEX format)
-    string luong_cipher;         // Lương được mã hóa (HEX format)
+    int id;                      // ID (auto-increment tu MySQL)
+    string ten_nv;               // Ten nhan vien (plaintext)
+    string vai_tro;              // Vai tro: "Admin" hoac "User"
+    string cccd_cipher;          // CCCD duoc ma hoa (HEX format)
+    string sdt_cipher;          // Mat khau duoc ma hoa (HEX format)
+    string matkhau_cipher;          // So dien thoai duoc ma hoa (HEX format)
+    string luong_cipher;         // Luong duoc ma hoa (HEX format)
 };
 
 // database helper class
@@ -25,63 +28,94 @@ private:
     string USER;
     string PASSWORD;
     string DATABASE;
-    void* connection;  // Sẽ cast về sql::Connection* khi sử dụng
+    void* connection;  // Se cast ve sql::Connection* khi su dung
 
     bool ExecuteQuery(const string& query);
     bool ExecuteInsert(const string& query);
+
+    // ======== ENCRYPTION/DECRYPTION HELPERS ========
+    // Encrypt all sensitive fields
+    void EncryptNhanVienData(const string& cccd, const string& sdt,
+                              const string& matkhau, const string& luong,
+                              string& cccd_encrypted, string& sdt_encrypted,
+                              string& matkhau_encrypted, string& luong_encrypted);
+
+    // Decrypt all sensitive fields
+    void DecryptNhanVienData(const string& cccd_encrypted, const string& sdt_encrypted,
+                              const string& matkhau_encrypted, const string& luong_encrypted,
+                              string& cccd_plain, string& sdt_plain,
+                              string& matkhau_plain, string& luong_plain);
+
+    // Apply role-based masking to decrypted data
+    void ApplyRoleBasedMasking(string& cccd, string& sdt, string& matkhau, string& luong,
+                                const string& currentUserRole);
+
+    // Combined decrypt + mask operation
+    void ProcessNhanVienFieldsWithRole(const string& cccd_encrypted, const string& sdt_encrypted,
+                                        const string& matkhau_encrypted, const string& luong_encrypted,
+                                        string& cccd_masked, string& sdt_masked,
+                                        string& matkhau_masked, string& luong_masked,
+                                        const string& currentUserRole);
     
 public:
-    // Constructor - Khởi tạo thông tin kết nối
+    // Constructor - Khoi tao thong tin ket noi
     DatabaseHelper(const string& host, int port, 
                    const string& user, const string& password, 
                    const string& database);
 
-    // Destructor - Đóng kết nối
+    // Destructor - Dong ket noi
     ~DatabaseHelper();
 
     bool Connect();
 
-    // Tạo bảng NhanVien nếu chưa tồn tại
+    // Tao bang NhanVien neu chua ton tai
     bool CreateTableNhanVien();
+
+    // Tao database views cho role-based masking
+    bool CreateRoleBasedViews();
     
-    // Thêm một nhân viên mới
+    // Them mot nhan vien moi
     bool InsertNhanVien(const string& ten_nv, const string& vai_tro,
                         const string& cccd_plaintext, 
                         const string& sdt_plaintext,
+                        const string& matkhau_plaintext,
                         const string& luong_plaintext);
 
-    bool GetNhanVienById(int id, nhanvien& result);
+    // ======== HAM TRUY VAN CO VAI TRO (ROLE-BASED MASKING) ========
+    // Lay nhan vien theo ID voi masking dua vao vai tro cua user hien tai
+    bool GetNhanVienByIdWithRole(int id, nhanvien& result, const string& currentUserRole);
 
-    // Lấy tất cả nhân viên
-    vector<nhanvien> GetAllNhanVien();
+    // Lay tat ca nhan vien voi masking dua vao vai tro cua user
+    vector<nhanvien> GetAllNhanVienWithRole(const string& currentUserRole);
 
-    // Lấy nhân viên theo vai trò (Admin hoặc User)
-    vector<nhanvien> GetNhanVienByRole(const string& vai_tro);
+    // Lay nhan vien theo vai tro voi masking
+    vector<nhanvien> GetNhanVienByRoleWithMask(const string& vai_tro, const string& currentUserRole);
 
 
-    // Cập nhật thông tin nhân viên
+
+    // Cap nhat thong tin nhan vien
     bool UpdateNhanVien(int id, const string& ten_nv, const string& vai_tro,
-                        const string& cccd_plaintext, const string& sdt_plaintext,
-                        const string& luong_plaintext);
+                        const string& cccd_plaintext, const string& sdt_plaintext, const string& matkhau_plaintext, const string& luong_plaintext);
                         
 
-    // Xóa nhân viên theo ID
+    // Xoa nhan vien theo ID
     bool DeleteNhanVienById(int id);
 
-    // Xóa tất cả nhân viên (cẩn thận!)
+    // Xoa tat ca nhan vien (can than!)
     bool DeleteAllNhanVien();
 
-
-    // Kiểm tra xem nhân viên có tồn tại không
-    bool NhanVienExists(int id);
-
-    // Đếm tổng số nhân viên trong DB
+    // Dem tong so nhan vien trong DB
     int GetTotalNhanVien();
 
-    // Kiểm tra kết nối còn sống không
+    // ======== AUTHENTICATION ========
+    // Xac thuc dang nhap (CCCD + Password)
+    // Tra ve: nhanvien struct neu thanh cong, id = -1 neu that bai
+    nhanvien AuthenticateUser(const string& cccd_plaintext, const string& matkhau_plaintext);
+
+    // Kiem tra ket noi con song khong
     bool IsConnected();
 
-    // Đóng kết nối
+    // Dong ket noi
     void Disconnect();
 };
 

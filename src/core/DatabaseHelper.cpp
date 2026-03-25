@@ -41,11 +41,11 @@ bool DatabaseHelper::Connect() {
         conn->setSchema(DATABASE);
         conn->setAutoCommit(true);  // Enable autocommit to ensure data visibility
         
-        cout << "[DATABASE] Đã kết nối tới MySQL: " << HOST << ":" << PORT << " [DB: " << DATABASE << "]" << endl;
+        cout << "[DATABASE] Da ket noi toi MySQL: " << HOST << ":" << PORT << " [DB: " << DATABASE << "]" << endl;
         return true; 
     } 
     catch (sql::SQLException &e) {
-        cerr << "[ERROR] Lỗi kết nối MySQL: " << e.what() 
+        cerr << "[ERROR] Loi ket noi MySQL: " << e.what() 
              << " (Code: " << e.getErrorCode() 
              << ", State: " << e.getSQLState() << ")" << endl;
         return false;
@@ -61,7 +61,7 @@ void DatabaseHelper::Disconnect() {
         sql::Connection* conn = (sql::Connection*)connection;
         delete conn;
         connection = nullptr;
-        cout << "[DATABASE] Đã ngắt kết nối" << endl;
+        cout << "[DATABASE] Da ngan ket noi" << endl;
     }
 }
 
@@ -69,7 +69,7 @@ void DatabaseHelper::Disconnect() {
 
 bool DatabaseHelper::ExecuteQuery(const string& query) {
     if (!IsConnected()) {
-        cerr << "[ERROR] Không kết nối được với database" << endl;
+        cerr << "[ERROR] Khong ket noi duoc voi database" << endl;
         return false;
     }
 
@@ -79,11 +79,11 @@ bool DatabaseHelper::ExecuteQuery(const string& query) {
         stmt->execute(query);
         delete stmt;
         
-        cout << "[DATABASE] Thực thi query: " << query.substr(0, 50) << "..." << endl;
+        cout << "[DATABASE] Thuc thi query: " << query.substr(0, 50) << "..." << endl;
         return true;
     }
     catch (sql::SQLException &e) {
-        cerr << "[ERROR] Lỗi thực thi query: " << e.what() 
+        cerr << "[ERROR] Loi thuc thi query: " << e.what() 
              << " (Code: " << e.getErrorCode() 
              << ", State: " << e.getSQLState() << ")" << endl;
         return false;
@@ -100,15 +100,199 @@ bool DatabaseHelper::CreateTableNhanVien() {
     string createTableSQL = 
         "CREATE TABLE IF NOT EXISTS nhanvien ( "
         "id INT AUTO_INCREMENT PRIMARY KEY, "
-        "ten_nv VARCHAR(100) NOT NULL COMMENT 'Tên nhân viên', "
+        "ten_nv VARCHAR(100) NOT NULL COMMENT 'Ten nhan vien', "
         "vai_tro VARCHAR(50) NOT NULL CHECK (vai_tro IN ('Admin', 'User')), "
-        "cccd_cipher VARCHAR(256) NOT NULL COMMENT 'CCCD mã hóa', "
-        "sdt_cipher VARCHAR(256) NOT NULL COMMENT 'Số điện thoại mã hóa', "
-        "luong_cipher VARCHAR(256) NOT NULL COMMENT 'Lương mã hóa', "
+        "cccd_cipher VARCHAR(256) NOT NULL UNIQUE COMMENT 'CCCD ma hoa (Blowfish)', "
+        "matkhau_cipher VARCHAR(256) NOT NULL COMMENT 'Mat khau ma hoa (Blowfish)', "
+        "sdt_cipher VARCHAR(256) NOT NULL UNIQUE COMMENT 'So dien thoai ma hoa (Blowfish)', "
+        "luong_cipher VARCHAR(256) NOT NULL COMMENT 'Luong ma hoa (Blowfish)', "
         "INDEX idx_vai_tro (vai_tro) "
         ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;";
 
-    return ExecuteQuery(createTableSQL);
+    if (!ExecuteQuery(createTableSQL)) {
+        return false;
+    }
+
+    // Check if default Admin account exists
+    try {
+        sql::Connection* conn = (sql::Connection*)connection;
+        sql::Statement* stmt = conn->createStatement();
+        sql::ResultSet* res = stmt->executeQuery("SELECT COUNT(*) as admin_count FROM nhanvien WHERE vai_tro = 'Admin';");
+        
+        int adminCount = 0;
+        if (res->next()) {
+            adminCount = res->getInt("admin_count");
+        }
+        
+        delete res;
+        delete stmt;
+        
+        // If no Admin account exists, create default Admin
+        if (adminCount == 0) {
+            cout << "[DATABASE] No Admin account found, creating default Admin account..." << endl;
+            
+            // Default Admin credentials
+            string defaultAdminName = "Administrator";
+            string defaultCCCD = "012345678912";
+            string defaultPhone = "0123456789";
+            string defaultPassword = "11111111";
+            string defaultSalary = "0";
+            
+            // Encrypt using Blowfish
+            Blowfish cipher(EncryptionConfig::BLOWFISH_KEY);
+            string cccd_encrypted = cipher.EncryptString(defaultCCCD);
+            string phone_encrypted = cipher.EncryptString(defaultPhone);
+            string password_encrypted = cipher.EncryptString(defaultPassword);
+            string salary_encrypted = cipher.EncryptString(defaultSalary);
+            
+            // Insert default Admin
+            string insertAdminSQL = 
+                "INSERT INTO nhanvien (ten_nv, vai_tro, cccd_cipher, matkhau_cipher, sdt_cipher, luong_cipher) "
+                "VALUES ('" + defaultAdminName + "', 'Admin', '" + cccd_encrypted + "', '" + password_encrypted + "', '" + 
+                phone_encrypted + "', '" + salary_encrypted + "');";
+            
+            if (ExecuteInsert(insertAdminSQL)) {
+                cout << "[DATABASE] Default Admin account created successfully!" << endl;
+                cout << "[DATABASE] Default Admin Credentials:" << endl;
+                cout << "           CCCD: " << defaultCCCD << endl;
+                cout << "           Password: " << defaultPassword << endl;
+            } else {
+                cerr << "[ERROR] Failed to create default Admin account" << endl;
+            }
+        }
+        
+        return true;
+    }
+    catch (sql::SQLException &e) {
+        cerr << "[ERROR] Error checking/creating default Admin: " << e.what() << endl;
+        return false;
+    }
+}
+
+// ======== DATABASE VIEWS FOR ROLE-BASED MASKING ========
+
+bool DatabaseHelper::CreateRoleBasedViews() {
+    if (!IsConnected()) {
+        cerr << "[ERROR] Khong ket noi duoc database" << endl;
+        return false;
+    }
+
+    // View cho USER role - che giau tat ca du lieu nhay cam
+    string createUserViewSQL = 
+        "CREATE OR REPLACE VIEW v_nhanvien_user AS "
+        "SELECT "
+        "  id, "
+        "  ten_nv, "
+        "  vai_tro, "
+        "  cccd_cipher AS cccd_cipher_encrypted, "
+        "  sdt_cipher AS sdt_cipher_encrypted, "
+        "matkhau_cipher AS matkhau_cipher_encrypted, "
+        "  luong_cipher AS luong_cipher_encrypted "
+        "FROM nhanvien;";
+
+    // View cho ADMIN role - hien thi tat ca du lieu
+    string createAdminViewSQL = 
+        "CREATE OR REPLACE VIEW v_nhanvien_admin AS "
+        "SELECT "
+        "  id, "
+        "  ten_nv, "
+        "  vai_tro, "
+        "  cccd_cipher, "
+        "  sdt_cipher, "
+        "matkhau_cipher, "
+        "  luong_cipher "
+        "FROM nhanvien;";
+
+    try {
+        sql::Connection* conn = (sql::Connection*)connection;
+        sql::Statement* stmt = conn->createStatement();
+        
+        stmt->execute(createUserViewSQL);
+        cout << "[DATABASE] View v_nhanvien_user da tao thanh cong" << endl;
+        
+        stmt->execute(createAdminViewSQL);
+        cout << "[DATABASE] View v_nhanvien_admin da tao thanh cong" << endl;
+        
+        delete stmt;
+        return true;
+    }
+    catch (sql::SQLException &e) {
+        cerr << "[ERROR] Loi tao views: " << e.what() 
+             << " (Code: " << e.getErrorCode() << ")" << endl;
+        return false;
+    }
+}
+
+// ======== ENCRYPTION/DECRYPTION HELPERS ========
+
+void DatabaseHelper::EncryptNhanVienData(const string& cccd, const string& sdt,
+                                         const string& matkhau, const string& luong,
+                                         string& cccd_encrypted, string& sdt_encrypted,
+                                         string& matkhau_encrypted, string& luong_encrypted) {
+    Blowfish cipher(EncryptionConfig::BLOWFISH_KEY);
+    cccd_encrypted = cipher.EncryptString(cccd);
+    sdt_encrypted = cipher.EncryptString(sdt);
+    matkhau_encrypted = cipher.EncryptString(matkhau);
+    luong_encrypted = cipher.EncryptString(luong);
+}
+
+void DatabaseHelper::DecryptNhanVienData(const string& cccd_encrypted, const string& sdt_encrypted,
+                                         const string& matkhau_encrypted, const string& luong_encrypted,
+                                         string& cccd_plain, string& sdt_plain,
+                                         string& matkhau_plain, string& luong_plain) {
+    Blowfish cipher(EncryptionConfig::BLOWFISH_KEY);
+    cccd_plain = cipher.DecryptString(cccd_encrypted);
+    sdt_plain = cipher.DecryptString(sdt_encrypted);
+    matkhau_plain = cipher.DecryptString(matkhau_encrypted);
+    luong_plain = cipher.DecryptString(luong_encrypted);
+}
+
+void DatabaseHelper::ApplyRoleBasedMasking(string& cccd, string& sdt, string& matkhau, string& luong,
+                                           const string& currentUserRole) {
+    UserRole role = MaskingLogic::StringToRole(currentUserRole);
+    
+    // Convert strings to char buffers
+    char cccd_buffer[256];
+    char sdt_buffer[256];
+    char matkhau_buffer[256];
+    char luong_buffer[256];
+    
+    strcpy(cccd_buffer, cccd.c_str());
+    strcpy(sdt_buffer, sdt.c_str());
+    strcpy(matkhau_buffer, matkhau.c_str());
+    strcpy(luong_buffer, luong.c_str());
+    
+    // Apply masking
+    MaskingLogic::MaskCCCDByRole(cccd_buffer, role, sizeof(cccd_buffer));
+    MaskingLogic::MaskPhoneByRole(sdt_buffer, role, sizeof(sdt_buffer));
+    MaskingLogic::MaskToThreeStarByRole(matkhau_buffer, role, sizeof(matkhau_buffer));
+    MaskingLogic::MaskToThreeStarByRole(luong_buffer, role, sizeof(luong_buffer));
+    
+    // Convert back to strings
+    cccd = string(cccd_buffer);
+    sdt = string(sdt_buffer);
+    matkhau = string(matkhau_buffer);
+    luong = string(luong_buffer);
+}
+
+void DatabaseHelper::ProcessNhanVienFieldsWithRole(const string& cccd_encrypted, const string& sdt_encrypted,
+                                                   const string& matkhau_encrypted, const string& luong_encrypted,
+                                                   string& cccd_masked, string& sdt_masked,
+                                                   string& matkhau_masked, string& luong_masked,
+                                                   const string& currentUserRole) {
+    // Decrypt
+    string cccd_plain, sdt_plain, matkhau_plain, luong_plain;
+    DecryptNhanVienData(cccd_encrypted, sdt_encrypted, matkhau_encrypted, luong_encrypted,
+                        cccd_plain, sdt_plain, matkhau_plain, luong_plain);
+    
+    // Apply masking
+    ApplyRoleBasedMasking(cccd_plain, sdt_plain, matkhau_plain, luong_plain, currentUserRole);
+    
+    // Return masked data
+    cccd_masked = cccd_plain;
+    sdt_masked = sdt_plain;
+    matkhau_masked = matkhau_plain;
+    luong_masked = luong_plain;
 }
 
 // ======== INSERT OPERATIONS ========
@@ -116,49 +300,55 @@ bool DatabaseHelper::CreateTableNhanVien() {
 bool DatabaseHelper::InsertNhanVien(const string& ten_nv, const string& vai_tro,
                                     const string& cccd_plaintext, 
                                     const string& sdt_plaintext,
+                                    const string& matkhau_plaintext,
                                     const string& luong_plaintext) {
     if (!IsConnected()) {
-        cerr << "[ERROR] Không kết nối được database" << endl;
+        cerr << "[ERROR] Khong ket noi duoc database" << endl;
         return false;
     }
 
     // ======== VALIDATION ========
-    // CCCD phải chính xác 12 ký tự
+    // CCCD phai chinh xac 12 ky tu
     if (cccd_plaintext.length() != 12) {
-        cerr << "[ERROR] CCCD phải chính xác 12 ký tự (hiện tại: " << cccd_plaintext.length() << " ký tự)" << endl;
+        cerr << "[ERROR] CCCD phai chinh xac 12 ky tu (hien tai: " << cccd_plaintext.length() << " ky tu)" << endl;
         return false;
     }
 
-    // SDT phải ít nhất 10 ký tự
+    // SDT phai it nhat 10 ky tu
     if (sdt_plaintext.length() < 10) {
-        cerr << "[ERROR] Số điện thoại phải ít nhất 10 ký tự (hiện tại: " << sdt_plaintext.length() << " ký tự)" << endl;
+        cerr << "[ERROR] So dien thoai phai it nhat 10 ky tu (hien tai: " << sdt_plaintext.length() << " ky tu)" << endl;
+        return false;
+    }
+    // Mat khau phai it nhat 8 ky tu
+    if (matkhau_plaintext.length() < 8) {
+        cerr << "[ERROR] Mat khau phai it nhat 8 ky tu (hien tai: " << matkhau_plaintext.length() << " ky tu)" << endl;
         return false;
     }
 
-    // Lương phải ít nhất 7 ký tự
+    // Luong phai it nhat 7 ky tu
     if (luong_plaintext.length() < 7) {
-        cerr << "[ERROR] Lương phải ít nhất 7 ký tự (hiện tại: " << luong_plaintext.length() << " ký tự)" << endl;
+        cerr << "[ERROR] Luong phai it nhat 7 ky tu (hien tai: " << luong_plaintext.length() << " ky tu)" << endl;
         return false;
     }
 
-    // Mã hóa
-    Blowfish cipher("MatMaHoc@NIST2025");
-    string cccd_hex = cipher.EncryptString(cccd_plaintext);
-    string sdt_hex = cipher.EncryptString(sdt_plaintext);
-    string luong_hex = cipher.EncryptString(luong_plaintext);
+    // Ma hoa using helper
+    string cccd_hex, sdt_hex, matkhau_hex, luong_hex;
+    EncryptNhanVienData(cccd_plaintext, sdt_plaintext, matkhau_plaintext, luong_plaintext,
+                       cccd_hex, sdt_hex, matkhau_hex, luong_hex);
 
     try {
         sql::Connection* conn = (sql::Connection*)connection;
         sql::PreparedStatement* pstmt = conn->prepareStatement(
-            "INSERT INTO nhanvien (ten_nv, vai_tro, cccd_cipher, sdt_cipher, luong_cipher) "
-            "VALUES (?, ?, ?, ?, ?)"
+            "INSERT INTO nhanvien (ten_nv, vai_tro, cccd_cipher, matkhau_cipher, sdt_cipher, luong_cipher) "
+            "VALUES (?, ?, ?, ?, ?, ?)"
         );
 
         pstmt->setString(1, ten_nv);
         pstmt->setString(2, vai_tro);
-        pstmt->setString(3, cccd_hex);
-        pstmt->setString(4, sdt_hex);
-        pstmt->setString(5, luong_hex);
+        pstmt->setString(3, cccd_hex);             // Encrypted CCCD
+        pstmt->setString(4, matkhau_hex);          // Encrypted Password
+        pstmt->setString(5, sdt_hex);              // Encrypted SDT
+        pstmt->setString(6, luong_hex);            // Encrypted Salary
 
         pstmt->execute();
         delete pstmt;
@@ -166,221 +356,16 @@ bool DatabaseHelper::InsertNhanVien(const string& ten_nv, const string& vai_tro,
         // COMMIT the transaction
         conn->commit();
 
-        cout << "[DATABASE] Thêm nhân viên: " << ten_nv << " (" << vai_tro << ")" << endl;
+        cout << "[DATABASE] Them nhan vien: " << ten_nv << " (" << vai_tro << ")" << endl;
         cout << "[DATABASE]   CCCD HEX: " << cccd_hex << endl;
+        cout << "[DATABASE]   SDT: " << sdt_plaintext << endl;
         cout << "[DATABASE]   SDT HEX: " << sdt_hex << endl;
-        cout << "[DATABASE]   LƯƠNG HEX: " << luong_hex << endl;
         return true;
     }
     catch (sql::SQLException &e) {
-        cerr << "[ERROR] Lỗi thêm nhân viên: " << e.what() 
+        cerr << "[ERROR] Loi them nhan vien: " << e.what() 
              << " (Code: " << e.getErrorCode() << ")" << endl;
         return false;
-    }
-}
-
-// ======== QUERY OPERATIONS ========
-
-bool DatabaseHelper::GetNhanVienById(int id, nhanvien& result) {
-    if (!IsConnected()) {
-        cerr << "[ERROR] Không kết nối được database" << endl;
-        return false;
-    }
-
-    try {
-        sql::Connection* conn = (sql::Connection*)connection;
-        sql::PreparedStatement* pstmt = conn->prepareStatement(
-            "SELECT id, ten_nv, vai_tro, cccd_cipher, sdt_cipher, luong_cipher "
-            "FROM nhanvien WHERE id = ?"
-        );
-        pstmt->setInt(1, id);
-
-        sql::ResultSet* res = pstmt->executeQuery();
-
-        if (res->next()) {
-            result.id = res->getInt("id");
-            result.ten_nv = res->getString("ten_nv");
-            result.vai_tro = res->getString("vai_tro");
-            
-            // Get encrypted data and decrypt first, then mask
-            string cccd_encrypted = res->getString("cccd_cipher");
-            string sdt_encrypted = res->getString("sdt_cipher");
-            string luong_encrypted = res->getString("luong_cipher");
-            
-            // Decrypt using Blowfish
-            Blowfish cipher("MatMaHoc@NIST2025");
-            string cccd_plain = cipher.DecryptString(cccd_encrypted);
-            string sdt_plain = cipher.DecryptString(sdt_encrypted);
-            string luong_plain = cipher.DecryptString(luong_encrypted);
-            
-            // Convert to char array and apply masking on plaintext
-            char cccd_buffer[256];
-            char sdt_buffer[256];
-            char luong_buffer[256];
-            
-            strcpy(cccd_buffer, cccd_plain.c_str());
-            strcpy(sdt_buffer, sdt_plain.c_str());
-            strcpy(luong_buffer, luong_plain.c_str());
-            
-            // Now mask the plaintext data
-            MaskingLogic::MaskCCCD(cccd_buffer, sizeof(cccd_buffer));
-            MaskingLogic::MaskPhone(sdt_buffer, sizeof(sdt_buffer));
-            MaskingLogic::MaskSalary(luong_buffer, sizeof(luong_buffer));
-            
-            result.cccd_cipher = string(cccd_buffer);
-            result.sdt_cipher = string(sdt_buffer);
-            result.luong_cipher = string(luong_buffer);
-
-            delete res;
-            delete pstmt;
-            cout << "[DATABASE] Query nhân viên ID: " << id << " → Tìm thấy" << endl;
-            return true;
-        }
-
-        delete res;
-        delete pstmt;
-        cout << "[DATABASE] Query nhân viên ID: " << id << " → Không tìm thấy" << endl;
-        return false;
-    }
-    catch (sql::SQLException &e) {
-        cerr << "[ERROR] Lỗi query nhân viên: " << e.what() 
-             << " (Code: " << e.getErrorCode() << ")" << endl;
-        return false;
-    }
-}
-
-vector<nhanvien> DatabaseHelper::GetAllNhanVien() {
-    vector<nhanvien> employees;
-
-    if (!IsConnected()) {
-        cerr << "[ERROR] Không kết nối được database" << endl;
-        return employees;
-    }
-
-    try {
-        sql::Connection* conn = (sql::Connection*)connection;
-        sql::Statement* stmt = conn->createStatement();
-        sql::ResultSet* res = stmt->executeQuery(
-            "SELECT id, ten_nv, vai_tro, cccd_cipher, sdt_cipher, luong_cipher "
-            "FROM nhanvien ORDER BY id ASC;"
-        );
-
-        while (res->next()) {
-            nhanvien emp;
-            emp.id = res->getInt("id");
-            emp.ten_nv = res->getString("ten_nv");
-            emp.vai_tro = res->getString("vai_tro");
-            
-            // Get encrypted data and decrypt first, then mask
-            string cccd_encrypted = res->getString("cccd_cipher");
-            string sdt_encrypted = res->getString("sdt_cipher");
-            string luong_encrypted = res->getString("luong_cipher");
-            
-            // Decrypt using Blowfish
-            Blowfish cipher("MatMaHoc@NIST2025");
-            string cccd_plain = cipher.DecryptString(cccd_encrypted);
-            string sdt_plain = cipher.DecryptString(sdt_encrypted);
-            string luong_plain = cipher.DecryptString(luong_encrypted);
-            
-            // Convert to char array and apply masking on plaintext
-            char cccd_buffer[256];
-            char sdt_buffer[256];
-            char luong_buffer[256];
-            
-            strcpy(cccd_buffer, cccd_plain.c_str());
-            strcpy(sdt_buffer, sdt_plain.c_str());
-            strcpy(luong_buffer, luong_plain.c_str());
-            
-            // Now mask the plaintext data
-            MaskingLogic::MaskCCCD(cccd_buffer, sizeof(cccd_buffer));
-            MaskingLogic::MaskPhone(sdt_buffer, sizeof(sdt_buffer));
-            MaskingLogic::MaskSalary(luong_buffer, sizeof(luong_buffer));
-            
-            emp.cccd_cipher = string(cccd_buffer);
-            emp.sdt_cipher = string(sdt_buffer);
-            emp.luong_cipher = string(luong_buffer);
-            
-            employees.push_back(emp);
-        }
-
-        delete res;
-        delete stmt;
-        cout << "[DATABASE] Lấy tất cả nhân viên: " << employees.size() << " bản ghi" << endl;
-        return employees;
-    }
-    catch (sql::SQLException &e) {
-        cerr << "[ERROR] Lỗi lấy tất cả nhân viên: " << e.what() 
-             << " (Code: " << e.getErrorCode() << ")" << endl;
-        return employees;
-    }
-}
-
-vector<nhanvien> DatabaseHelper::GetNhanVienByRole(const string& vai_tro) {
-    vector<nhanvien> employees;
-
-    if (!IsConnected()) {
-        cerr << "[ERROR] Không kết nối được database" << endl;
-        return employees;
-    }
-
-    try {
-        sql::Connection* conn = (sql::Connection*)connection;
-        sql::PreparedStatement* pstmt = conn->prepareStatement(
-            "SELECT id, ten_nv, vai_tro, cccd_cipher, sdt_cipher, luong_cipher "
-            "FROM nhanvien WHERE vai_tro = ? ORDER BY id ASC;"
-        );
-        pstmt->setString(1, vai_tro);
-
-        sql::ResultSet* res = pstmt->executeQuery();
-
-        while (res->next()) {
-            nhanvien emp;
-            emp.id = res->getInt("id");
-            emp.ten_nv = res->getString("ten_nv");
-            emp.vai_tro = res->getString("vai_tro");
-            
-            // Get encrypted data and decrypt first, then mask
-            string cccd_encrypted = res->getString("cccd_cipher");
-            string sdt_encrypted = res->getString("sdt_cipher");
-            string luong_encrypted = res->getString("luong_cipher");
-            
-            // Decrypt using Blowfish
-            Blowfish cipher("MatMaHoc@NIST2025");
-            string cccd_plain = cipher.DecryptString(cccd_encrypted);
-            string sdt_plain = cipher.DecryptString(sdt_encrypted);
-            string luong_plain = cipher.DecryptString(luong_encrypted);
-            
-            // Convert to char array and apply masking on plaintext
-            char cccd_buffer[256];
-            char sdt_buffer[256];
-            char luong_buffer[256];
-            
-            strcpy(cccd_buffer, cccd_plain.c_str());
-            strcpy(sdt_buffer, sdt_plain.c_str());
-            strcpy(luong_buffer, luong_plain.c_str());
-            
-            // Now mask the plaintext data
-            MaskingLogic::MaskCCCD(cccd_buffer, sizeof(cccd_buffer));
-            MaskingLogic::MaskPhone(sdt_buffer, sizeof(sdt_buffer));
-            MaskingLogic::MaskSalary(luong_buffer, sizeof(luong_buffer));
-            
-            emp.cccd_cipher = string(cccd_buffer);
-            emp.sdt_cipher = string(sdt_buffer);
-            emp.luong_cipher = string(luong_buffer);
-            
-            employees.push_back(emp);
-        }
-
-        delete res;
-        delete pstmt;
-        cout << "[DATABASE] Lấy nhân viên theo vai trò '" << vai_tro 
-             << "': " << employees.size() << " bản ghi" << endl;
-        return employees;
-    }
-    catch (sql::SQLException &e) {
-        cerr << "[ERROR] Lỗi lấy nhân viên theo vai trò: " << e.what() 
-             << " (Code: " << e.getErrorCode() << ")" << endl;
-        return employees;
     }
 }
 
@@ -388,30 +373,31 @@ vector<nhanvien> DatabaseHelper::GetNhanVienByRole(const string& vai_tro) {
 
 bool DatabaseHelper::UpdateNhanVien(int id, const string& ten_nv, const string& vai_tro,
                                     const string& cccd_plaintext, const string& sdt_plaintext,
-                                    const string& luong_plaintext) {
+                                    const string& matkhau_plaintext, const string& luong_plaintext) {
     if (!IsConnected()) {
-        cerr << "[ERROR] Không kết nối được database" << endl;
+        cerr << "[ERROR] Khong ket noi duoc database" << endl;
         return false;
     }
 
-    Blowfish cipher("MatMaHoc@NIST2025");
-    string cccd_hex = cipher.EncryptString(cccd_plaintext);
-    string sdt_hex = cipher.EncryptString(sdt_plaintext);
-    string luong_hex = cipher.EncryptString(luong_plaintext);
+    // Ma hoa using helper
+    string cccd_hex, sdt_hex, matkhau_hex, luong_hex;
+    EncryptNhanVienData(cccd_plaintext, sdt_plaintext, matkhau_plaintext, luong_plaintext,
+                       cccd_hex, sdt_hex, matkhau_hex, luong_hex);
 
     try {
         sql::Connection* conn = (sql::Connection*)connection;
         sql::PreparedStatement* pstmt = conn->prepareStatement(
             "UPDATE nhanvien SET ten_nv = ?, vai_tro = ?, cccd_cipher = ?, "
-            "sdt_cipher = ?, luong_cipher = ? WHERE id = ?"
+            "sdt_cipher = ?, matkhau_cipher = ?, luong_cipher = ? WHERE id = ?"
         );
 
         pstmt->setString(1, ten_nv);
         pstmt->setString(2, vai_tro);
-        pstmt->setString(3, cccd_hex);
-        pstmt->setString(4, sdt_hex);
-        pstmt->setString(5, luong_hex);
-        pstmt->setInt(6, id);
+        pstmt->setString(3, cccd_hex);             // Encrypted CCCD
+        pstmt->setString(4, sdt_hex);              // Encrypted SDT
+        pstmt->setString(5, matkhau_hex);          // Encrypted Password
+        pstmt->setString(6, luong_hex);            // Encrypted Salary
+        pstmt->setInt(7, id);
 
         pstmt->execute();
         delete pstmt;
@@ -419,11 +405,11 @@ bool DatabaseHelper::UpdateNhanVien(int id, const string& ten_nv, const string& 
         // COMMIT the transaction
         conn->commit();
 
-        cout << "[DATABASE] Cập nhật nhân viên ID: " << id << " thành công" << endl;
+        cout << "[DATABASE] Cap nhat nhan vien ID: " << id << " thanh cong" << endl;
         return true;
     }
     catch (sql::SQLException &e) {
-        cerr << "[ERROR] Lỗi cập nhật nhân viên: " << e.what() 
+        cerr << "[ERROR] Loi cap nhat nhan vien: " << e.what()
              << " (Code: " << e.getErrorCode() << ")" << endl;
         return false;
     }
@@ -433,7 +419,7 @@ bool DatabaseHelper::UpdateNhanVien(int id, const string& ten_nv, const string& 
 
 bool DatabaseHelper::DeleteNhanVienById(int id) {
     if (!IsConnected()) {
-        cerr << "[ERROR] Không kết nối được database" << endl;
+        cerr << "[ERROR] Khong ket noi duoc database" << endl;
         return false;
     }
 
@@ -449,11 +435,11 @@ bool DatabaseHelper::DeleteNhanVienById(int id) {
         // COMMIT the transaction
         conn->commit();
 
-        cout << "[DATABASE] Xóa nhân viên ID: " << id << " thành công" << endl;
+        cout << "[DATABASE] Xoa nhan vien ID: " << id << " thanh cong" << endl;
         return true;
     }
     catch (sql::SQLException &e) {
-        cerr << "[ERROR] Lỗi xóa nhân viên: " << e.what() 
+        cerr << "[ERROR] Loi xoa nhan vien: " << e.what() 
              << " (Code: " << e.getErrorCode() << ")" << endl;
         return false;
     }
@@ -461,21 +447,16 @@ bool DatabaseHelper::DeleteNhanVienById(int id) {
 
 bool DatabaseHelper::DeleteAllNhanVien() {
     if (!IsConnected()) {
-        cerr << "[ERROR] Không kết nối được database" << endl;
+        cerr << "[ERROR] Khong ket noi duoc database" << endl;
         return false;
     }
 
-    cout << "[DATABASE] Xóa tất cả nhân viên (CẨN THẬN!)" << endl;
+    cout << "[DATABASE] Xoa tat ca nhan vien (CAN THAN!)" << endl;
     string deleteSQL = "DELETE FROM nhanvien;";
     return ExecuteQuery(deleteSQL);
 }
 
 // ======== UTILITY FUNCTIONS ========
-
-bool DatabaseHelper::NhanVienExists(int id) {
-    nhanvien result;
-    return GetNhanVienById(id, result);
-}
 
 int DatabaseHelper::GetTotalNhanVien() {
     if (!IsConnected()) {
@@ -500,5 +481,240 @@ int DatabaseHelper::GetTotalNhanVien() {
         cerr << "[ERROR] Lỗi đếm nhân viên: " << e.what() 
              << " (Code: " << e.getErrorCode() << ")" << endl;
         return 0;
+    }
+}
+
+// ======== ROLE-BASED QUERY OPERATIONS ========
+
+bool DatabaseHelper::GetNhanVienByIdWithRole(int id, nhanvien& result, const string& currentUserRole) {
+    if (!IsConnected()) {
+        cerr << "[ERROR] Khong ket noi duoc database" << endl;
+        return false;
+    }
+
+    try {
+        sql::Connection* conn = (sql::Connection*)connection;
+        sql::PreparedStatement* pstmt = conn->prepareStatement(
+            "SELECT id, ten_nv, vai_tro, cccd_cipher, matkhau_cipher, sdt_cipher, luong_cipher "
+            "FROM nhanvien WHERE id = ?"
+        );
+        pstmt->setInt(1, id);
+
+        sql::ResultSet* res = pstmt->executeQuery();
+
+        if (res->next()) {
+            result.id = res->getInt("id");
+            result.ten_nv = res->getString("ten_nv");
+            result.vai_tro = res->getString("vai_tro");
+            
+            // Get encrypted data
+            string cccd_encrypted = res->getString("cccd_cipher");
+            string sdt_encrypted = res->getString("sdt_cipher");
+            string matkhau_encrypted = res->getString("matkhau_cipher");
+            string luong_encrypted = res->getString("luong_cipher");
+            
+            // Process: decrypt + mask using helper
+            string cccd_masked, sdt_masked, matkhau_masked, luong_masked;
+            ProcessNhanVienFieldsWithRole(cccd_encrypted, sdt_encrypted, matkhau_encrypted, luong_encrypted,
+                                         cccd_masked, sdt_masked, matkhau_masked, luong_masked,
+                                         currentUserRole);
+            
+            result.cccd_cipher = cccd_masked;
+            result.sdt_cipher = sdt_masked;
+            result.matkhau_cipher = matkhau_masked;
+            result.luong_cipher = luong_masked;
+
+            delete res;
+            delete pstmt;
+            cout << "[DATABASE] Query nhân viên ID: " << id << " (Role: " << currentUserRole << ") → Tìm thấy" << endl;
+            return true;
+        }
+
+        delete res;
+        delete pstmt;
+        cout << "[DATABASE] Query nhân viên ID: " << id << " → Không tìm thấy" << endl;
+        return false;
+    }
+    catch (sql::SQLException &e) {
+        cerr << "[ERROR] Lỗi query nhân viên: " << e.what() 
+             << " (Code: " << e.getErrorCode() << ")" << endl;
+        return false;
+    }
+}
+
+vector<nhanvien> DatabaseHelper::GetAllNhanVienWithRole(const string& currentUserRole) {
+    vector<nhanvien> employees;
+
+    if (!IsConnected()) {
+        cerr << "[ERROR] Khong ket noi duoc database" << endl;
+        return employees;
+    }
+
+    try {
+        sql::Connection* conn = (sql::Connection*)connection;
+        sql::Statement* stmt = conn->createStatement();
+        sql::ResultSet* res = stmt->executeQuery(
+            "SELECT id, ten_nv, vai_tro, cccd_cipher, matkhau_cipher, sdt_cipher, luong_cipher "
+            "FROM nhanvien ORDER BY id ASC;"
+        );
+
+        while (res->next()) {
+            nhanvien emp;
+            emp.id = res->getInt("id");
+            emp.ten_nv = res->getString("ten_nv");
+            emp.vai_tro = res->getString("vai_tro");
+            
+            // Get encrypted data
+            string cccd_encrypted = res->getString("cccd_cipher");
+            string sdt_encrypted = res->getString("sdt_cipher");
+            string matkhau_encrypted = res->getString("matkhau_cipher");
+            string luong_encrypted = res->getString("luong_cipher");
+            
+            // Process: decrypt + mask using helper
+            string cccd_masked, sdt_masked, matkhau_masked, luong_masked;
+            ProcessNhanVienFieldsWithRole(cccd_encrypted, sdt_encrypted, matkhau_encrypted, luong_encrypted,
+                                         cccd_masked, sdt_masked, matkhau_masked, luong_masked,
+                                         currentUserRole);
+            
+            emp.cccd_cipher = cccd_masked;
+            emp.sdt_cipher = sdt_masked;
+            emp.matkhau_cipher = matkhau_masked;
+            emp.luong_cipher = luong_masked;
+            
+            employees.push_back(emp);
+        }
+
+        delete res;
+        delete stmt;
+        cout << "[DATABASE] Lấy tất cả nhân viên (Role: " << currentUserRole << "): " 
+             << employees.size() << " bản ghi" << endl;
+        return employees;
+    }
+    catch (sql::SQLException &e) {
+        cerr << "[ERROR] Lỗi lấy tất cả nhân viên: " << e.what() 
+             << " (Code: " << e.getErrorCode() << ")" << endl;
+        return employees;
+    }
+}
+
+vector<nhanvien> DatabaseHelper::GetNhanVienByRoleWithMask(const string& vai_tro, const string& currentUserRole) {
+    vector<nhanvien> employees;
+
+    if (!IsConnected()) {
+        cerr << "[ERROR] Khong ket noi duoc database" << endl;
+        return employees;
+    }
+
+    try {
+        sql::Connection* conn = (sql::Connection*)connection;
+        sql::PreparedStatement* pstmt = conn->prepareStatement(
+            "SELECT id, ten_nv, vai_tro, cccd_cipher, matkhau_cipher, sdt_cipher, luong_cipher "
+            "FROM nhanvien WHERE vai_tro = ? ORDER BY id ASC;"
+        );
+        pstmt->setString(1, vai_tro);
+
+        sql::ResultSet* res = pstmt->executeQuery();
+
+        while (res->next()) {
+            nhanvien emp;
+            emp.id = res->getInt("id");
+            emp.ten_nv = res->getString("ten_nv");
+            emp.vai_tro = res->getString("vai_tro");
+            
+            // Get encrypted data
+            string cccd_encrypted = res->getString("cccd_cipher");
+            string sdt_encrypted = res->getString("sdt_cipher");
+            string matkhau_encrypted = res->getString("matkhau_cipher");
+            string luong_encrypted = res->getString("luong_cipher");
+            
+            // Process: decrypt + mask using helper
+            string cccd_masked, sdt_masked, matkhau_masked, luong_masked;
+            ProcessNhanVienFieldsWithRole(cccd_encrypted, sdt_encrypted, matkhau_encrypted, luong_encrypted,
+                                         cccd_masked, sdt_masked, matkhau_masked, luong_masked,
+                                         currentUserRole);
+            
+            emp.cccd_cipher = cccd_masked;
+            emp.sdt_cipher = sdt_masked;
+            emp.matkhau_cipher = matkhau_masked;
+            emp.luong_cipher = luong_masked;
+            
+            employees.push_back(emp);
+        }
+
+        delete res;
+        delete pstmt;
+        cout << "[DATABASE] Lấy nhân viên theo vai trò '" << vai_tro 
+             << "' (Role: " << currentUserRole << "): " << employees.size() << " bản ghi" << endl;
+        return employees;
+    }
+    catch (sql::SQLException &e) {
+        cerr << "[ERROR] Lỗi lấy nhân viên theo vai trò: " << e.what() 
+             << " (Code: " << e.getErrorCode() << ")" << endl;
+        return employees;
+    }
+}
+
+// ======== AUTHENTICATION ========
+
+nhanvien DatabaseHelper::AuthenticateUser(const string& cccd_plaintext, const string& matkhau_plaintext) {
+    nhanvien result;
+    result.id = -1;  // Default failed state
+    
+    if (!IsConnected()) {
+        cerr << "[ERROR] Database not connected" << endl;
+        return result;
+    }
+    
+    try {
+        sql::Connection* conn = (sql::Connection*)connection;
+        sql::Statement* stmt = conn->createStatement();
+        sql::ResultSet* res = stmt->executeQuery(
+            "SELECT id, ten_nv, vai_tro, cccd_cipher, matkhau_cipher, sdt_cipher, luong_cipher "
+            "FROM nhanvien ORDER BY id ASC;"
+        );
+        
+        while (res->next()) {
+            // Get encrypted data
+            string cccd_encrypted = res->getString("cccd_cipher");
+            string matkhau_encrypted = res->getString("matkhau_cipher");
+            string sdt_encrypted = res->getString("sdt_cipher");
+            string luong_encrypted = res->getString("luong_cipher");
+            
+            // Decrypt using helper
+            string cccd_decrypted, matkhau_decrypted, sdt_decrypted, luong_decrypted;
+            DecryptNhanVienData(cccd_encrypted, sdt_encrypted, matkhau_encrypted, luong_encrypted,
+                               cccd_decrypted, sdt_decrypted, matkhau_decrypted, luong_decrypted);
+            
+            // Compare with input
+            if (cccd_plaintext == cccd_decrypted && matkhau_plaintext == matkhau_decrypted) {
+                // Found matching user
+                result.id = res->getInt("id");
+                result.ten_nv = res->getString("ten_nv");
+                result.vai_tro = res->getString("vai_tro");
+                result.cccd_cipher = cccd_encrypted;
+                result.sdt_cipher = sdt_encrypted;
+                result.matkhau_cipher = matkhau_encrypted;
+                result.luong_cipher = luong_encrypted;
+                
+                cout << "[AUTH] User authenticated: ID=" << result.id 
+                     << ", Name=" << result.ten_nv 
+                     << ", Role=" << result.vai_tro << endl;
+                
+                delete res;
+                delete stmt;
+                return result;
+            }
+        }
+        
+        // Not found
+        cerr << "[AUTH] Authentication failed for CCCD: " << cccd_plaintext << endl;
+        delete res;
+        delete stmt;
+        return result;
+    }
+    catch (sql::SQLException &e) {
+        cerr << "[ERROR] Authentication query error: " << e.what() 
+             << " (Code: " << e.getErrorCode() << ")" << endl;
+        return result;
     }
 }

@@ -225,7 +225,7 @@ void Blowfish::DecryptBlock(uint32_t& L, uint32_t& R) {
     L ^= P[0];
 }
 
-// 6. Mã hóa chuỗi String thành chuỗi HEX (Phục vụ lưu Database)
+// 6. Ma hoa chuoi String thanh chuoi HEX (Phuc vu luu Database)
 string Blowfish::EncryptString(const string& text) {
     string paddedText = text;
     while (paddedText.length() % 8 != 0) {
@@ -245,7 +245,7 @@ string Blowfish::EncryptString(const string& text) {
     return hexStream.str();
 }
 
-// 7. Giải mã chuỗi HEX trở lại String nguyên bản
+// 7. Giai ma chuoi HEX tro lai String nguyen ban
 string Blowfish::DecryptString(const string& hexText) {
     string result = "";
     for (size_t i = 0; i < hexText.length(); i += 16) {

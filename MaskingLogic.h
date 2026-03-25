@@ -16,11 +16,11 @@ public:
     static void MaskSalary(char* buffer, size_t bufferSize = 20);
 
 
-    // Kiểm tra xem buffer có chứa dữ liệu đã được mô phỏng không
-    // Return: true nếu phát hiện '*', false nếu dữ liệu gốc
+    // Kiem tra xem buffer co chua du lieu da duoc mo phong khong
+    // Return: true neu phat hien '*', false neu du lieu goc
     static bool IsAlreadyMasked(const char* buffer);
 
-    // In ra buffer để debug
+    // In ra buffer de debug
     static void PrintBuffer(const char* buffer, const char* label);
 };
 
