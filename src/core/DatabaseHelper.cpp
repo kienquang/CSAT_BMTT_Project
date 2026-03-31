@@ -1,6 +1,7 @@
 #include "DatabaseHelper.h"
 #include "MaskingLogic.h"
 #include "Blowfish.h"
+#include "../shared/NetworkData.h"
 #include <iostream>
 #include <cstring>
 #include <vector>
@@ -215,17 +216,17 @@ void DatabaseHelper::ApplyClientMasking(string& cccd, string& sdt, string& matkh
 
 void DatabaseHelper::ProcessNhanVienFieldsForClient(const string& cccd_encrypted, const string& sdt_encrypted,
                                                     const string& matkhau_encrypted, const string& luong_encrypted,
+                                                    int requesterRole,
                                                     string& cccd_masked, string& sdt_masked,
                                                     string& matkhau_masked, string& luong_masked) {
-    // Decrypt
     string cccd_plain, sdt_plain, matkhau_plain, luong_plain;
     DecryptNhanVienData(cccd_encrypted, sdt_encrypted, matkhau_encrypted, luong_encrypted,
                         cccd_plain, sdt_plain, matkhau_plain, luong_plain);
-    
-    // Apply masking
-    ApplyClientMasking(cccd_plain, sdt_plain, matkhau_plain, luong_plain);
-    
-    // Return masked data
+
+    if (requesterRole == ROLE_USER) {
+        ApplyClientMasking(cccd_plain, sdt_plain, matkhau_plain, luong_plain);
+    }
+
     cccd_masked = cccd_plain;
     sdt_masked = sdt_plain;
     matkhau_masked = matkhau_plain;
@@ -412,7 +413,7 @@ int DatabaseHelper::GetTotalNhanVien() {
 
 // ======== CLIENT PAYLOAD QUERY OPERATIONS ========
 
-vector<nhanvien> DatabaseHelper::GetAllNhanVienForClient() {
+vector<nhanvien> DatabaseHelper::GetAllNhanVienForClient(int requesterRole) {
     vector<nhanvien> employees;
 
     if (!IsConnected()) {
@@ -433,6 +434,7 @@ vector<nhanvien> DatabaseHelper::GetAllNhanVienForClient() {
             emp.id = res->getInt("id");
             emp.ten_nv = res->getString("ten_nv");
             emp.vai_tro = res->getString("vai_tro");
+            // cout << "[DATABASE] Processing employee ID: " << emp.id << ", Name: " << emp.ten_nv << endl;
             
             // Get encrypted data
             string cccd_encrypted = res->getString("cccd_cipher");
@@ -443,6 +445,7 @@ vector<nhanvien> DatabaseHelper::GetAllNhanVienForClient() {
             // Process: decrypt + mask using helper
             string cccd_masked, sdt_masked, matkhau_masked, luong_masked;
             ProcessNhanVienFieldsForClient(cccd_encrypted, sdt_encrypted, matkhau_encrypted, luong_encrypted,
+                                           requesterRole,
                                            cccd_masked, sdt_masked, matkhau_masked, luong_masked);
             
             emp.cccd_cipher = cccd_masked;
@@ -455,7 +458,9 @@ vector<nhanvien> DatabaseHelper::GetAllNhanVienForClient() {
 
         delete res;
         delete stmt;
-        cout << "[DATABASE] Lay tat ca nhan vien masked cho client: " 
+        cout << "[DATABASE] Lay tat ca nhan vien cho client (" 
+             << (requesterRole == ROLE_USER ? "masked" : "plaintext")
+             << "): "
              << employees.size() << " bản ghi" << endl;
         return employees;
     }

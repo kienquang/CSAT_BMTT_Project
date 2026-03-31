@@ -40,6 +40,7 @@ private:
     void ApplyClientMasking(string& cccd, string& sdt, string& matkhau, string& luong);
     void ProcessNhanVienFieldsForClient(const string& cccd_encrypted, const string& sdt_encrypted,
                                         const string& matkhau_encrypted, const string& luong_encrypted,
+                                        int requesterRole,
                                         string& cccd_masked, string& sdt_masked,
                                         string& matkhau_masked, string& luong_masked);
 
@@ -56,7 +57,7 @@ public:
                         const string& sdt_plaintext,
                         const string& matkhau_plaintext,
                         const string& luong_plaintext);
-    vector<nhanvien> GetAllNhanVienForClient();
+    vector<nhanvien> GetAllNhanVienForClient(int requesterRole);
     bool UpdateNhanVien(int id, const string& ten_nv, const string& vai_tro,
                         const string& cccd_plaintext, const string& sdt_plaintext,
                         const string& matkhau_plaintext, const string& luong_plaintext);

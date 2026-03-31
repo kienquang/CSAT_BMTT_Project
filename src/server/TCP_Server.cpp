@@ -234,10 +234,11 @@ bool SendEmployeeListResponse(SOCKET clientSocket, DatabaseHelper& dbHelper,
         return SendAll(clientSocket, reinterpret_cast<const char*>(&header), sizeof(PacketData));
     }
 
-    vector<nhanvien> employees = dbHelper.GetAllNhanVienForClient();
+    const int responseDataType = sessionRole == ROLE_USER ? DATATYPE_MASKED : DATATYPE_PLAINTEXT;
+    vector<nhanvien> employees = dbHelper.GetAllNhanVienForClient(sessionRole);
     header.status = STATUS_SUCCESS;
     header.userRole = sessionRole;
-    header.dataType = DATATYPE_MASKED;
+    header.dataType = responseDataType;
     header.recordCount = static_cast<int>(employees.size());
     CopyToBuffer(header.message, "Lay danh sach nhan vien thanh cong.");
 
@@ -253,7 +254,7 @@ bool SendEmployeeListResponse(SOCKET clientSocket, DatabaseHelper& dbHelper,
         item.status = STATUS_SUCCESS;
         item.userRole = sessionRole;
         item.employeeId = employee.id;
-        item.dataType = DATATYPE_MASKED;
+        item.dataType = responseDataType;
         CopyToBuffer(item.employeeName, employee.ten_nv);
         CopyToBuffer(item.employeeRole, employee.vai_tro);
         CopyToBuffer(item.cccd, employee.cccd_cipher);

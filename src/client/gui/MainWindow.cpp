@@ -226,19 +226,22 @@ void MainWindow::onEditEmployee() {
             return;
         }
         
-        QMessageBox::information(this, "Security Notice",
-                                 "Sensitive fields are only sent masked from the server.\n"
-                                 "Please re-enter CCCD, phone, password, and salary to update this employee.");
+        const bool serverSentMaskedData = (currentUserRole != "Admin");
+        if (serverSentMaskedData) {
+            QMessageBox::information(this, "Security Notice",
+                                     "Sensitive fields are only sent masked from the server.\n"
+                                     "Please re-enter CCCD, phone, password, and salary to update this employee.");
+        }
 
         EmployeeDialog dialog(EmployeeDialog::EditMode, this);
         
         EmployeeDialog::EmployeeData currentData;
         currentData.name = QString::fromStdString(it->ten_nv);
         currentData.role = QString::fromStdString(it->vai_tro);
-        currentData.cccd = "";
-        currentData.phone = "";
-        currentData.password = "";
-        currentData.salary = "";
+        currentData.cccd = serverSentMaskedData ? "" : QString::fromStdString(it->cccd_cipher);
+        currentData.phone = serverSentMaskedData ? "" : QString::fromStdString(it->sdt_cipher);
+        currentData.password = serverSentMaskedData ? "" : QString::fromStdString(it->matkhau_cipher);
+        currentData.salary = serverSentMaskedData ? "" : QString::fromStdString(it->luong_cipher);
         
         dialog.setEmployeeData(currentData);
         
