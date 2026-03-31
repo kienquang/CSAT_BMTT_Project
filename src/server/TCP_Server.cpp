@@ -90,6 +90,74 @@ bool DecryptLoginPayload(const PacketData& request, string& cccd, string& passwo
     return true;
 }
 
+string SerializeEmployeePlaintext(const nhanvien& employee, const string& passwordPlain) {
+    return employee.ten_nv + "|" + employee.vai_tro + "|" + employee.cccd_cipher + "|" +
+           employee.sdt_cipher + "|" + passwordPlain + "|" + employee.luong_cipher;
+}
+
+bool EncryptAdminEmployeePayload(const nhanvien& employee, const string& passwordPlain,
+                                 PacketData& packet, string& error) {
+    const string adminKey = EnvConfig::GetString("APP_LOGIN_BLOWFISH_KEY");
+    if (adminKey.empty()) {
+        error = "Server missing APP_LOGIN_BLOWFISH_KEY";
+        return false;
+    }
+
+    const string plain = SerializeEmployeePlaintext(employee, passwordPlain);
+    Blowfish cipher(adminKey);
+    const string encrypted = cipher.EncryptString(plain);
+
+    if (!WriteLoginCiphertext(packet, encrypted)) {
+        error = "Encrypted admin payload exceeds packet capacity";
+        return false;
+    }
+
+    packet.dataType = DATATYPE_ADMIN_BLOWFISH;
+    return true;
+}
+
+bool DecryptAdminEmployeePayload(const PacketData& request,
+                                 nhanvien& employee,
+                                 string& passwordPlain,
+                                 string& error) {
+    if (request.dataType != DATATYPE_ADMIN_BLOWFISH) {
+        error = "Request is not admin-encrypted payload";
+        return false;
+    }
+
+    const string adminKey = EnvConfig::GetString("APP_LOGIN_BLOWFISH_KEY");
+    if (adminKey.empty()) {
+        error = "Server missing APP_LOGIN_BLOWFISH_KEY";
+        return false;
+    }
+
+    const string encrypted = ReadLoginCiphertext(request);
+    Blowfish cipher(adminKey);
+    const string plain = cipher.DecryptString(encrypted);
+
+    size_t pos = 0, prev = 0;
+    string parts[6];
+    int idx = 0;
+    while ((pos = plain.find('|', prev)) != string::npos && idx < 5) {
+        parts[idx++] = plain.substr(prev, pos - prev);
+        prev = pos + 1;
+    }
+    parts[idx++] = plain.substr(prev);
+
+    if (idx != 6) {
+        error = "Malformed admin payload";
+        return false;
+    }
+
+    employee.ten_nv = parts[0];
+    employee.vai_tro = parts[1];
+    employee.cccd_cipher = parts[2];
+    employee.sdt_cipher = parts[3];
+    passwordPlain = parts[4];
+    employee.luong_cipher = parts[5];
+    return true;
+}
+
 PacketData HandleLogin(DatabaseHelper& dbHelper, const PacketData& request,
                        bool& isAuthenticated, int& sessionRole, int& sessionUserId) {
     PacketData response;
@@ -149,14 +217,32 @@ PacketData HandleAddEmployee(DatabaseHelper& dbHelper, const PacketData& request
     PacketData response;
     InitializePacket(response);
     response.requestType = request.requestType;
+    nhanvien employeePayload{};
+    string passwordPlain;
+
+    if (request.dataType == DATATYPE_ADMIN_BLOWFISH) {
+        string decryptError;
+        if (!DecryptAdminEmployeePayload(request, employeePayload, passwordPlain, decryptError)) {
+            response.status = STATUS_ERROR;
+            CopyToBuffer(response.message, decryptError);
+            return response;
+        }
+    } else {
+        employeePayload.ten_nv = request.employeeName;
+        employeePayload.vai_tro = request.employeeRole;
+        employeePayload.cccd_cipher = request.cccd;
+        employeePayload.sdt_cipher = request.phone;
+        passwordPlain = request.password;
+        employeePayload.luong_cipher = request.salary;
+    }
 
     const bool inserted = dbHelper.InsertNhanVien(
-        request.employeeName,
-        request.employeeRole,
-        request.cccd,
-        request.phone,
-        request.password,
-        request.salary
+        employeePayload.ten_nv,
+        employeePayload.vai_tro,
+        employeePayload.cccd_cipher,
+        employeePayload.sdt_cipher,
+        passwordPlain,
+        employeePayload.luong_cipher
     );
 
     response.status = inserted ? STATUS_SUCCESS : STATUS_ERROR;
@@ -174,14 +260,33 @@ PacketData HandleUpdateEmployee(DatabaseHelper& dbHelper, const PacketData& requ
     InitializePacket(response);
     response.requestType = request.requestType;
 
+    nhanvien employeePayload{};
+    string passwordPlain;
+
+    if (request.dataType == DATATYPE_ADMIN_BLOWFISH) {
+        string decryptError;
+        if (!DecryptAdminEmployeePayload(request, employeePayload, passwordPlain, decryptError)) {
+            response.status = STATUS_ERROR;
+            CopyToBuffer(response.message, decryptError);
+            return response;
+        }
+    } else {
+        employeePayload.ten_nv = request.employeeName;
+        employeePayload.vai_tro = request.employeeRole;
+        employeePayload.cccd_cipher = request.cccd;
+        employeePayload.sdt_cipher = request.phone;
+        passwordPlain = request.password;
+        employeePayload.luong_cipher = request.salary;
+    }
+
     const bool updated = dbHelper.UpdateNhanVien(
         request.employeeId,
-        request.employeeName,
-        request.employeeRole,
-        request.cccd,
-        request.phone,
-        request.password,
-        request.salary
+        employeePayload.ten_nv,
+        employeePayload.vai_tro,
+        employeePayload.cccd_cipher,
+        employeePayload.sdt_cipher,
+        passwordPlain,
+        employeePayload.luong_cipher
     );
 
     response.status = updated ? STATUS_SUCCESS : STATUS_ERROR;
@@ -234,7 +339,7 @@ bool SendEmployeeListResponse(SOCKET clientSocket, DatabaseHelper& dbHelper,
         return SendAll(clientSocket, reinterpret_cast<const char*>(&header), sizeof(PacketData));
     }
 
-    const int responseDataType = sessionRole == ROLE_USER ? DATATYPE_MASKED : DATATYPE_PLAINTEXT;
+    const int responseDataType = sessionRole == ROLE_USER ? DATATYPE_MASKED : DATATYPE_ADMIN_BLOWFISH;
     vector<nhanvien> employees = dbHelper.GetAllNhanVienForClient(sessionRole);
     header.status = STATUS_SUCCESS;
     header.userRole = sessionRole;
@@ -255,12 +360,21 @@ bool SendEmployeeListResponse(SOCKET clientSocket, DatabaseHelper& dbHelper,
         item.userRole = sessionRole;
         item.employeeId = employee.id;
         item.dataType = responseDataType;
-        CopyToBuffer(item.employeeName, employee.ten_nv);
-        CopyToBuffer(item.employeeRole, employee.vai_tro);
-        CopyToBuffer(item.cccd, employee.cccd_cipher);
-        CopyToBuffer(item.phone, employee.sdt_cipher);
-        CopyToBuffer(item.salary, employee.luong_cipher);
-        CopyToBuffer(item.passwordMasked, employee.matkhau_cipher);
+
+        if (responseDataType == DATATYPE_ADMIN_BLOWFISH) {
+            string encErr;
+            if (!EncryptAdminEmployeePayload(employee, employee.matkhau_cipher, item, encErr)) {
+                error = encErr;
+                return false;
+            }
+        } else {
+            CopyToBuffer(item.employeeName, employee.ten_nv);
+            CopyToBuffer(item.employeeRole, employee.vai_tro);
+            CopyToBuffer(item.cccd, employee.cccd_cipher);
+            CopyToBuffer(item.phone, employee.sdt_cipher);
+            CopyToBuffer(item.salary, employee.luong_cipher);
+            CopyToBuffer(item.passwordMasked, employee.matkhau_cipher);
+        }
 
         if (!SendAll(clientSocket, reinterpret_cast<const char*>(&item), sizeof(PacketData))) {
             error = "Failed to send employee list item";

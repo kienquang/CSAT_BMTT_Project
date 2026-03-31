@@ -122,9 +122,10 @@ inline std::string ReadLoginCiphertext(const PacketData& packet) {
 #define REQ_LOGOUT           7
 
 // ======== DATA TYPE CONSTANTS ========
-#define DATATYPE_PLAINTEXT   1
-#define DATATYPE_MASKED      2
-#define DATATYPE_LOGIN_BLOWFISH 3
+#define DATATYPE_PLAINTEXT       1
+#define DATATYPE_MASKED          2
+#define DATATYPE_LOGIN_BLOWFISH  3
+#define DATATYPE_ADMIN_BLOWFISH  4
 
 // ======== STATUS CODE CONSTANTS ========
 #define STATUS_SUCCESS       0
