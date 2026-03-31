@@ -4,12 +4,16 @@
 set(CORE_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/Blowfish.h
     ${CMAKE_CURRENT_SOURCE_DIR}/DatabaseHelper.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/EncryptionConfig.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/EnvConfig.h
     ${CMAKE_CURRENT_SOURCE_DIR}/MaskingLogic.h
 )
 
 set(CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/Blowfish.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DatabaseHelper.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/EncryptionConfig.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/EnvConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/MaskingLogic.cpp
 )
 

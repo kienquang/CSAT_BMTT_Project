@@ -4,10 +4,12 @@
 #include <QLabel>
 #include <QMessageBox>
 #include <iostream>
+#include "../../core/EnvConfig.h"
+#include "../network/NetworkClient.h"
 
 LoginDialog::LoginDialog(QWidget *parent)
     : QDialog(parent), 
-      loginResult{false, "", -1}
+      loginResult{false, "", -1, "", nullptr}
 {
     setWindowTitle("CSAT_BMTT - Login");
     setModal(true);
@@ -15,39 +17,18 @@ LoginDialog::LoginDialog(QWidget *parent)
     setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
     
     setupUi();
-    
-    // Initialize database
-    dbHelper = std::make_unique<DatabaseHelper>(
-        "localhost",
-        3306,
-        "root",
-        "",  // No password for root
-        "csatbmtt"
-    );
-    
-    if (!dbHelper->Connect()) {
-        QMessageBox::critical(this, "Database Error",
-                              "Failed to connect to database.\n"
-                              "Please check your database configuration.");
-        return;
+
+    networkClient = std::make_shared<NetworkClient>();
+    const std::string serverHost = EnvConfig::GetString("APP_SERVER_HOST", "127.0.0.1");
+    const int serverPort = EnvConfig::GetInt("APP_SERVER_PORT", 8080);
+    std::string error;
+    if (!networkClient->Connect(serverHost, serverPort, error)) {
+        QMessageBox::critical(this, "Server Error",
+                              QString("Failed to connect to server %1:%2.\n%3")
+                                  .arg(QString::fromStdString(serverHost))
+                                  .arg(serverPort)
+                                  .arg(QString::fromStdString(error)));
     }
-    
-    // Initialize database tables and views
-    std::cout << "[LOGIN] Creating database tables..." << std::endl;
-    if (!dbHelper->CreateTableNhanVien()) {
-        QMessageBox::critical(this, "Database Error",
-                              "Failed to create database tables.\n"
-                              "Please check your database permissions.");
-        return;
-    }
-    
-    if (!dbHelper->CreateRoleBasedViews()) {
-        QMessageBox::warning(this, "Database Warning",
-                             "Failed to create database views.\n"
-                             "Some features may not work correctly.");
-    }
-    
-    std::cout << "[LOGIN] Database initialization completed" << std::endl;
 }
 
 LoginDialog::~LoginDialog() {}
@@ -119,27 +100,30 @@ void LoginDialog::onLoginClicked() {
         return;
     }
     
-    // Check database connection
-    if (!dbHelper || !dbHelper->IsConnected()) {
-        QMessageBox::critical(this, "Error", "Database is not connected!");
+    if (!networkClient || !networkClient->IsConnected()) {
+        QMessageBox::critical(this, "Error", "Server is not connected!");
         return;
     }
     
     try {
-        // Authenticate user
-        nhanvien user = dbHelper->AuthenticateUser(cccd.toStdString(), password.toStdString());
-        
-        if (user.id != -1) {
-            // Login successful
+        NetworkClient::LoginResult result;
+        std::string error;
+        if (!networkClient->Login(cccd.toStdString(), password.toStdString(), result, error)) {
+            QMessageBox::critical(this, "Error",
+                                  QString("Login request failed: %1").arg(QString::fromStdString(error)));
+            return;
+        }
+
+        if (result.success) {
             loginResult.success = true;
-            loginResult.userRole = QString::fromStdString(user.vai_tro);
-            loginResult.userId = user.id;
-            
+            loginResult.userRole = QString::fromStdString(result.userRole);
+            loginResult.userId = result.userId;
+            loginResult.userName = QString::fromStdString(result.userName);
+            loginResult.networkClient = networkClient;
             accept();
         } else {
-            // Login failed
             QMessageBox::warning(this, "Login Failed", 
-                "Invalid CCCD or password!\nPlease try again.");
+                QString::fromStdString(result.message));
             cccdEdit->clear();
             passwordEdit->clear();
             cccdEdit->setFocus();
@@ -152,6 +136,6 @@ void LoginDialog::onLoginClicked() {
 }
 
 void LoginDialog::onCancelClicked() {
-    loginResult = {false, "", -1};
+    loginResult = {false, "", -1, "", nullptr};
     reject();
 }

@@ -135,12 +135,13 @@ add_subdirectory(src)
 if(BUILD_NETWORK_APPS)
     # ======== SERVER APPLICATION ========
     add_executable(Server 
-        ${CMAKE_SOURCE_DIR}/src/network/TCP_Server.cpp
+        ${CMAKE_SOURCE_DIR}/src/server/TCP_Server.cpp
     )
 
     target_include_directories(Server PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/network
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/server
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/shared
         ${MYSQL_INCLUDE_DIR}
         ${MYSQL_INCLUDE_DIR}/jdbc
     )
@@ -155,38 +156,20 @@ if(BUILD_NETWORK_APPS)
 
     copy_mysql_dlls(Server)
 
-    # ======== CLIENT APPLICATION ========
-    add_executable(Client
-        ${CMAKE_SOURCE_DIR}/src/network/TCP_Client.cpp
-    )
-
-    target_include_directories(Client PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/core
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/network
-        ${MYSQL_INCLUDE_DIR}
-        ${MYSQL_INCLUDE_DIR}/jdbc
-    )
-
-    target_link_directories(Client PRIVATE ${MYSQL_LIB_DIR})
-
-    target_link_libraries(Client PRIVATE
-        core_lib
-        mysqlcppconn
-        ws2_32
-    )
-
-    copy_mysql_dlls(Client)
 endif()
 
 # ======== QT GUI APPLICATION ========
 if(BUILD_QT_GUI)
     add_executable(CSATApp WIN32
-        ${CMAKE_SOURCE_DIR}/src/apps/main_qt.cpp
+        ${CMAKE_SOURCE_DIR}/src/client/main_qt.cpp
     )
 
     target_include_directories(CSATApp PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/client
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/client/gui
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/client/network
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/shared
         ${MYSQL_INCLUDE_DIR}
         ${MYSQL_INCLUDE_DIR}/jdbc
     )
@@ -211,11 +194,8 @@ if(BUILD_QT_GUI)
 endif()
 
 # ======== INSTALL RULES ========
-install(TARGETS main
-        RUNTIME DESTINATION bin)
-
 if(BUILD_NETWORK_APPS)
-    install(TARGETS Server Client
+    install(TARGETS Server
             RUNTIME DESTINATION bin)
 endif()
 

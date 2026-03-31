@@ -1,25 +1,25 @@
 #include "MainWindow.h"
 #include "ui_MainWindow.h"
 #include "EmployeeDialog.h"
+#include "../network/NetworkClient.h"
+#include <algorithm>
 #include <QMessageBox>
 #include <QApplication>
 #include <QTableWidgetItem>
 #include <QHeaderView>
 #include <iostream>
 
-MainWindow::MainWindow(QWidget *parent, const QString& userRole)
+MainWindow::MainWindow(std::shared_ptr<NetworkClient> networkClient, QWidget *parent, const QString& userRole, const QString& userName)
     : QMainWindow(parent),
       ui(new Ui::MainWindow),
+      networkClient(std::move(networkClient)),
       currentUserRole(userRole),
+      currentUserName(userName),
       selectedEmployeeId(-1)
 {
     ui->setupUi(this);
     
-    // Set user role display (read-only)
-    ui->roleDisplay->setText(userRole);
-    
-    // Initialize database
-    initializeDatabase();
+    ui->roleDisplay->setText(QString("%1 (%2)").arg(currentUserName, currentUserRole));
     
     // Setup UI connections
     setupConnections();
@@ -37,30 +37,6 @@ MainWindow::MainWindow(QWidget *parent, const QString& userRole)
 
 MainWindow::~MainWindow() {
     delete ui;
-}
-
-void MainWindow::initializeDatabase() {
-    // Create DatabaseHelper instance
-    // Note: Update credentials as needed from config
-    dbHelper = std::make_unique<DatabaseHelper>(
-        "localhost",
-        3306,
-        "root",
-        "",  // Change to actual password
-        "csatbmtt"
-    );
-    
-    if (!dbHelper->Connect()) {
-        QMessageBox::critical(this, "Database Error",
-                              "Failed to connect to database.\n"
-                              "Please check your database configuration.");
-        std::cerr << "[ERROR] Database connection failed!" << std::endl;
-    } else {
-        // Create tables if they don't exist
-        dbHelper->CreateTableNhanVien();
-        dbHelper->CreateRoleBasedViews();
-        std::cout << "[SUCCESS] Database initialized" << std::endl;
-    }
 }
 
 void MainWindow::setupConnections() {
@@ -106,52 +82,38 @@ void MainWindow::controlButtonVisibility() {
 }
 
 void MainWindow::loadEmployeeData() {
-    if (!dbHelper || !dbHelper->IsConnected()) {
-        QMessageBox::warning(this, "Warning", "Database is not connected!");
+    if (!networkClient || !networkClient->IsConnected()) {
+        QMessageBox::warning(this, "Warning", "Server is not connected!");
         return;
     }
     
-    // Clear existing rows
     ui->employeeTable->setRowCount(0);
     
     try {
-        // Get employees with role-based masking
-        auto employees = dbHelper->GetAllNhanVienWithRole(currentUserRole.toStdString());
-        
-        // Populate table
-        for (size_t i = 0; i < employees.size(); ++i) {
-            ui->employeeTable->insertRow(i);
-            
-            // ID
-            ui->employeeTable->setItem(i, 0, 
-                new QTableWidgetItem(QString::number(employees[i].id)));
-            
-            // Name
-            ui->employeeTable->setItem(i, 1,
-                new QTableWidgetItem(QString::fromStdString(employees[i].ten_nv)));
-            
-            // Role
-            ui->employeeTable->setItem(i, 2,
-                new QTableWidgetItem(QString::fromStdString(employees[i].vai_tro)));
-            
-            // CCCD (with masking applied by DatabaseHelper)
-            ui->employeeTable->setItem(i, 3,
-                new QTableWidgetItem(QString::fromStdString(employees[i].cccd_cipher)));
-            
-            // Phone (with masking applied by DatabaseHelper)
-            ui->employeeTable->setItem(i, 4,
-                new QTableWidgetItem(QString::fromStdString(employees[i].sdt_cipher)));
-            
-            // Salary (with masking applied by DatabaseHelper)
-            ui->employeeTable->setItem(i, 5,
-                new QTableWidgetItem(QString::fromStdString(employees[i].luong_cipher)));
-            
-            // Password (with masking applied by DatabaseHelper)
-            ui->employeeTable->setItem(i, 6,
-                new QTableWidgetItem(QString::fromStdString(employees[i].matkhau_cipher)));
+        std::string error;
+        currentEmployees.clear();
+        if (!networkClient->FetchAllEmployees(currentEmployees, error)) {
+            throw std::runtime_error(error);
         }
         
-        // Resize columns to content
+        for (size_t i = 0; i < currentEmployees.size(); ++i) {
+            ui->employeeTable->insertRow(i);
+            ui->employeeTable->setItem(i, 0, 
+                new QTableWidgetItem(QString::number(currentEmployees[i].id)));
+            ui->employeeTable->setItem(i, 1,
+                new QTableWidgetItem(QString::fromStdString(currentEmployees[i].ten_nv)));
+            ui->employeeTable->setItem(i, 2,
+                new QTableWidgetItem(QString::fromStdString(currentEmployees[i].vai_tro)));
+            ui->employeeTable->setItem(i, 3,
+                new QTableWidgetItem(QString::fromStdString(currentEmployees[i].cccd_cipher)));
+            ui->employeeTable->setItem(i, 4,
+                new QTableWidgetItem(QString::fromStdString(currentEmployees[i].sdt_cipher)));
+            ui->employeeTable->setItem(i, 5,
+                new QTableWidgetItem(QString::fromStdString(currentEmployees[i].luong_cipher)));
+            ui->employeeTable->setItem(i, 6,
+                new QTableWidgetItem(QString::fromStdString(currentEmployees[i].matkhau_cipher)));
+        }
+
         ui->employeeTable->horizontalHeader()->stretchLastSection();
         
     } catch (const std::exception& e) {
@@ -162,12 +124,16 @@ void MainWindow::loadEmployeeData() {
 }
 
 void MainWindow::updateStatistics() {
-    if (!dbHelper || !dbHelper->IsConnected()) {
+    if (!networkClient || !networkClient->IsConnected()) {
         return;
     }
     
     try {
-        int total = dbHelper->GetTotalNhanVien();
+        std::string error;
+        int total = 0;
+        if (!networkClient->GetTotalEmployees(total, error)) {
+            throw std::runtime_error(error);
+        }
         ui->totalValue->setText(QString::number(total));
     } catch (const std::exception& e) {
         std::cerr << "[ERROR] Failed to update statistics: " << e.what() << std::endl;
@@ -177,8 +143,8 @@ void MainWindow::updateStatistics() {
 // ===== SLOT IMPLEMENTATIONS =====
 
 void MainWindow::onAddEmployee() {
-    if (!dbHelper || !dbHelper->IsConnected()) {
-        QMessageBox::warning(this, "Warning", "Cannot add employee: Database not connected!");
+    if (!networkClient || !networkClient->IsConnected()) {
+        QMessageBox::warning(this, "Warning", "Cannot add employee: Server not connected!");
         return;
     }
     
@@ -217,18 +183,22 @@ void MainWindow::onAddEmployee() {
         }
         
         try {
-            // Insert new employee
-            if (dbHelper->InsertNhanVien(data.name.toStdString(),
-                                        data.role.toStdString(),
-                                        data.cccd.toStdString(),
-                                        data.phone.toStdString(),
-                                        data.password.toStdString(),
-                                        data.salary.toStdString())) {
+            nhanvien employee;
+            employee.id = -1;
+            employee.ten_nv = data.name.toStdString();
+            employee.vai_tro = data.role.toStdString();
+            employee.cccd_cipher = data.cccd.toStdString();
+            employee.sdt_cipher = data.phone.toStdString();
+            employee.luong_cipher = data.salary.toStdString();
+
+            std::string error;
+            if (networkClient->AddEmployee(employee, data.password.toStdString(), error)) {
                 QMessageBox::information(this, "Success", "Employee added successfully!");
                 loadEmployeeData();
                 updateStatistics();
             } else {
-                QMessageBox::warning(this, "Error", "Failed to add employee. Check if CCCD already exists.");
+                QMessageBox::warning(this, "Error",
+                                     QString("Failed to add employee: %1").arg(QString::fromStdString(error)));
             }
         } catch (const std::exception& e) {
             QMessageBox::critical(this, "Error",
@@ -243,30 +213,32 @@ void MainWindow::onEditEmployee() {
         return;
     }
     
-    if (!dbHelper || !dbHelper->IsConnected()) {
-        QMessageBox::warning(this, "Warning", "Cannot edit employee: Database not connected!");
+    if (!networkClient || !networkClient->IsConnected()) {
+        QMessageBox::warning(this, "Warning", "Cannot edit employee: Server not connected!");
         return;
     }
     
     try {
-        // Get current employee data
-        struct nhanvien emp;
-        if (!dbHelper->GetNhanVienByIdWithRole(selectedEmployeeId, emp, currentUserRole.toStdString())) {
-            QMessageBox::warning(this, "Error", "Failed to load employee data!");
+        auto it = std::find_if(currentEmployees.begin(), currentEmployees.end(),
+                               [this](const nhanvien& employee) { return employee.id == selectedEmployeeId; });
+        if (it == currentEmployees.end()) {
+            QMessageBox::warning(this, "Error", "Selected employee is not available.");
             return;
         }
         
-        // Create and show edit employee dialog with pre-filled data
+        QMessageBox::information(this, "Security Notice",
+                                 "Sensitive fields are only sent masked from the server.\n"
+                                 "Please re-enter CCCD, phone, password, and salary to update this employee.");
+
         EmployeeDialog dialog(EmployeeDialog::EditMode, this);
         
-        // Pre-fill dialog with current data
         EmployeeDialog::EmployeeData currentData;
-        currentData.name = QString::fromStdString(emp.ten_nv);
-        currentData.role = QString::fromStdString(emp.vai_tro);
-        currentData.cccd = QString::fromStdString(emp.cccd_cipher);  // Note: these are decrypted by GetNhanVienByIdWithRole
-        currentData.phone = QString::fromStdString(emp.sdt_cipher);
-        currentData.password = QString::fromStdString(emp.matkhau_cipher);
-        currentData.salary = QString::fromStdString(emp.luong_cipher);
+        currentData.name = QString::fromStdString(it->ten_nv);
+        currentData.role = QString::fromStdString(it->vai_tro);
+        currentData.cccd = "";
+        currentData.phone = "";
+        currentData.password = "";
+        currentData.salary = "";
         
         dialog.setEmployeeData(currentData);
         
@@ -301,20 +273,23 @@ void MainWindow::onEditEmployee() {
                 return;
             }
             
-            // Update employee
-            if (dbHelper->UpdateNhanVien(selectedEmployeeId,
-                                        newData.name.toStdString(),
-                                        newData.role.toStdString(),
-                                        newData.cccd.toStdString(),
-                                        newData.phone.toStdString(),
-                                        newData.password.toStdString(),
-                                        newData.salary.toStdString())) {
+            nhanvien employee;
+            employee.id = selectedEmployeeId;
+            employee.ten_nv = newData.name.toStdString();
+            employee.vai_tro = newData.role.toStdString();
+            employee.cccd_cipher = newData.cccd.toStdString();
+            employee.sdt_cipher = newData.phone.toStdString();
+            employee.luong_cipher = newData.salary.toStdString();
+
+            std::string error;
+            if (networkClient->UpdateEmployee(employee, newData.password.toStdString(), error)) {
                 QMessageBox::information(this, "Success", "Employee updated successfully!");
                 loadEmployeeData();
                 updateStatistics();
                 selectedEmployeeId = -1;
             } else {
-                QMessageBox::warning(this, "Error", "Failed to update employee!");
+                QMessageBox::warning(this, "Error",
+                                     QString("Failed to update employee: %1").arg(QString::fromStdString(error)));
             }
         }
     } catch (const std::exception& e) {
@@ -329,8 +304,8 @@ void MainWindow::onDeleteEmployee() {
         return;
     }
     
-    if (!dbHelper || !dbHelper->IsConnected()) {
-        QMessageBox::warning(this, "Warning", "Cannot delete employee: Database not connected!");
+    if (!networkClient || !networkClient->IsConnected()) {
+        QMessageBox::warning(this, "Warning", "Cannot delete employee: Server not connected!");
         return;
     }
     
@@ -344,13 +319,15 @@ void MainWindow::onDeleteEmployee() {
     }
     
     try {
-        if (dbHelper->DeleteNhanVienById(selectedEmployeeId)) {
+        std::string error;
+        if (networkClient->DeleteEmployee(selectedEmployeeId, error)) {
             QMessageBox::information(this, "Success", "Employee deleted successfully!");
             loadEmployeeData();
             updateStatistics();
             selectedEmployeeId = -1;
         } else {
-            QMessageBox::warning(this, "Error", "Failed to delete employee!");
+            QMessageBox::warning(this, "Error",
+                                 QString("Failed to delete employee: %1").arg(QString::fromStdString(error)));
         }
     } catch (const std::exception& e) {
         QMessageBox::critical(this, "Error",
@@ -382,7 +359,10 @@ void MainWindow::onLogout() {
                                                                QMessageBox::Yes | QMessageBox::No);
     
     if (reply == QMessageBox::Yes) {
-        // Close application
+        if (networkClient && networkClient->IsConnected()) {
+            std::string error;
+            networkClient->Logout(error);
+        }
         QApplication::quit();
     }
 }

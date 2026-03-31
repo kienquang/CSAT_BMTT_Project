@@ -5,7 +5,8 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <memory>
-#include "../core/DatabaseHelper.h"
+
+class NetworkClient;
 
 class LoginDialog : public QDialog {
     Q_OBJECT
@@ -15,6 +16,8 @@ public:
         bool success;
         QString userRole;    // "Admin" or "User"
         int userId;
+        QString userName;
+        std::shared_ptr<NetworkClient> networkClient;
     };
 
     LoginDialog(QWidget *parent = nullptr);
@@ -35,7 +38,7 @@ private:
     QPushButton *loginBtn;
     QPushButton *cancelBtn;
     
-    std::unique_ptr<DatabaseHelper> dbHelper;
+    std::shared_ptr<NetworkClient> networkClient;
 };
 
 #endif // LOGINDIALOG_H

@@ -2,7 +2,6 @@
 #include "MaskingLogic.h"
 #include "Blowfish.h"
 #include <iostream>
-#include <sstream>
 #include <cstring>
 #include <vector>
 #include <string>
@@ -90,10 +89,6 @@ bool DatabaseHelper::ExecuteQuery(const string& query) {
     }
 }
 
-bool DatabaseHelper::ExecuteInsert(const string& query) {
-    return ExecuteQuery(query);
-}
-
 // ======== TABLE OPERATIONS ========
 
 bool DatabaseHelper::CreateTableNhanVien() {
@@ -139,7 +134,7 @@ bool DatabaseHelper::CreateTableNhanVien() {
             string defaultSalary = "0";
             
             // Encrypt using Blowfish
-            Blowfish cipher(EncryptionConfig::BLOWFISH_KEY);
+            Blowfish cipher(EncryptionConfig::GetBlowfishKey());
             string cccd_encrypted = cipher.EncryptString(defaultCCCD);
             string phone_encrypted = cipher.EncryptString(defaultPhone);
             string password_encrypted = cipher.EncryptString(defaultPassword);
@@ -151,7 +146,7 @@ bool DatabaseHelper::CreateTableNhanVien() {
                 "VALUES ('" + defaultAdminName + "', 'Admin', '" + cccd_encrypted + "', '" + password_encrypted + "', '" + 
                 phone_encrypted + "', '" + salary_encrypted + "');";
             
-            if (ExecuteInsert(insertAdminSQL)) {
+            if (ExecuteQuery(insertAdminSQL)) {
                 cout << "[DATABASE] Default Admin account created successfully!" << endl;
                 cout << "[DATABASE] Default Admin Credentials:" << endl;
                 cout << "           CCCD: " << defaultCCCD << endl;
@@ -169,67 +164,13 @@ bool DatabaseHelper::CreateTableNhanVien() {
     }
 }
 
-// ======== DATABASE VIEWS FOR ROLE-BASED MASKING ========
-
-bool DatabaseHelper::CreateRoleBasedViews() {
-    if (!IsConnected()) {
-        cerr << "[ERROR] Khong ket noi duoc database" << endl;
-        return false;
-    }
-
-    // View cho USER role - che giau tat ca du lieu nhay cam
-    string createUserViewSQL = 
-        "CREATE OR REPLACE VIEW v_nhanvien_user AS "
-        "SELECT "
-        "  id, "
-        "  ten_nv, "
-        "  vai_tro, "
-        "  cccd_cipher AS cccd_cipher_encrypted, "
-        "  sdt_cipher AS sdt_cipher_encrypted, "
-        "matkhau_cipher AS matkhau_cipher_encrypted, "
-        "  luong_cipher AS luong_cipher_encrypted "
-        "FROM nhanvien;";
-
-    // View cho ADMIN role - hien thi tat ca du lieu
-    string createAdminViewSQL = 
-        "CREATE OR REPLACE VIEW v_nhanvien_admin AS "
-        "SELECT "
-        "  id, "
-        "  ten_nv, "
-        "  vai_tro, "
-        "  cccd_cipher, "
-        "  sdt_cipher, "
-        "matkhau_cipher, "
-        "  luong_cipher "
-        "FROM nhanvien;";
-
-    try {
-        sql::Connection* conn = (sql::Connection*)connection;
-        sql::Statement* stmt = conn->createStatement();
-        
-        stmt->execute(createUserViewSQL);
-        cout << "[DATABASE] View v_nhanvien_user da tao thanh cong" << endl;
-        
-        stmt->execute(createAdminViewSQL);
-        cout << "[DATABASE] View v_nhanvien_admin da tao thanh cong" << endl;
-        
-        delete stmt;
-        return true;
-    }
-    catch (sql::SQLException &e) {
-        cerr << "[ERROR] Loi tao views: " << e.what() 
-             << " (Code: " << e.getErrorCode() << ")" << endl;
-        return false;
-    }
-}
-
 // ======== ENCRYPTION/DECRYPTION HELPERS ========
 
 void DatabaseHelper::EncryptNhanVienData(const string& cccd, const string& sdt,
                                          const string& matkhau, const string& luong,
                                          string& cccd_encrypted, string& sdt_encrypted,
                                          string& matkhau_encrypted, string& luong_encrypted) {
-    Blowfish cipher(EncryptionConfig::BLOWFISH_KEY);
+    Blowfish cipher(EncryptionConfig::GetBlowfishKey());
     cccd_encrypted = cipher.EncryptString(cccd);
     sdt_encrypted = cipher.EncryptString(sdt);
     matkhau_encrypted = cipher.EncryptString(matkhau);
@@ -240,17 +181,14 @@ void DatabaseHelper::DecryptNhanVienData(const string& cccd_encrypted, const str
                                          const string& matkhau_encrypted, const string& luong_encrypted,
                                          string& cccd_plain, string& sdt_plain,
                                          string& matkhau_plain, string& luong_plain) {
-    Blowfish cipher(EncryptionConfig::BLOWFISH_KEY);
+    Blowfish cipher(EncryptionConfig::GetBlowfishKey());
     cccd_plain = cipher.DecryptString(cccd_encrypted);
     sdt_plain = cipher.DecryptString(sdt_encrypted);
     matkhau_plain = cipher.DecryptString(matkhau_encrypted);
     luong_plain = cipher.DecryptString(luong_encrypted);
 }
 
-void DatabaseHelper::ApplyRoleBasedMasking(string& cccd, string& sdt, string& matkhau, string& luong,
-                                           const string& currentUserRole) {
-    UserRole role = MaskingLogic::StringToRole(currentUserRole);
-    
+void DatabaseHelper::ApplyClientMasking(string& cccd, string& sdt, string& matkhau, string& luong) {
     // Convert strings to char buffers
     char cccd_buffer[256];
     char sdt_buffer[256];
@@ -263,10 +201,10 @@ void DatabaseHelper::ApplyRoleBasedMasking(string& cccd, string& sdt, string& ma
     strcpy(luong_buffer, luong.c_str());
     
     // Apply masking
-    MaskingLogic::MaskCCCDByRole(cccd_buffer, role, sizeof(cccd_buffer));
-    MaskingLogic::MaskPhoneByRole(sdt_buffer, role, sizeof(sdt_buffer));
-    MaskingLogic::MaskToThreeStarByRole(matkhau_buffer, role, sizeof(matkhau_buffer));
-    MaskingLogic::MaskToThreeStarByRole(luong_buffer, role, sizeof(luong_buffer));
+    MaskingLogic::MaskCCCDForClient(cccd_buffer, sizeof(cccd_buffer));
+    MaskingLogic::MaskPhoneForClient(sdt_buffer, sizeof(sdt_buffer));
+    MaskingLogic::MaskToThreeStarForClient(matkhau_buffer, sizeof(matkhau_buffer));
+    MaskingLogic::MaskToThreeStarForClient(luong_buffer, sizeof(luong_buffer));
     
     // Convert back to strings
     cccd = string(cccd_buffer);
@@ -275,18 +213,17 @@ void DatabaseHelper::ApplyRoleBasedMasking(string& cccd, string& sdt, string& ma
     luong = string(luong_buffer);
 }
 
-void DatabaseHelper::ProcessNhanVienFieldsWithRole(const string& cccd_encrypted, const string& sdt_encrypted,
-                                                   const string& matkhau_encrypted, const string& luong_encrypted,
-                                                   string& cccd_masked, string& sdt_masked,
-                                                   string& matkhau_masked, string& luong_masked,
-                                                   const string& currentUserRole) {
+void DatabaseHelper::ProcessNhanVienFieldsForClient(const string& cccd_encrypted, const string& sdt_encrypted,
+                                                    const string& matkhau_encrypted, const string& luong_encrypted,
+                                                    string& cccd_masked, string& sdt_masked,
+                                                    string& matkhau_masked, string& luong_masked) {
     // Decrypt
     string cccd_plain, sdt_plain, matkhau_plain, luong_plain;
     DecryptNhanVienData(cccd_encrypted, sdt_encrypted, matkhau_encrypted, luong_encrypted,
                         cccd_plain, sdt_plain, matkhau_plain, luong_plain);
     
     // Apply masking
-    ApplyRoleBasedMasking(cccd_plain, sdt_plain, matkhau_plain, luong_plain, currentUserRole);
+    ApplyClientMasking(cccd_plain, sdt_plain, matkhau_plain, luong_plain);
     
     // Return masked data
     cccd_masked = cccd_plain;
@@ -445,17 +382,6 @@ bool DatabaseHelper::DeleteNhanVienById(int id) {
     }
 }
 
-bool DatabaseHelper::DeleteAllNhanVien() {
-    if (!IsConnected()) {
-        cerr << "[ERROR] Khong ket noi duoc database" << endl;
-        return false;
-    }
-
-    cout << "[DATABASE] Xoa tat ca nhan vien (CAN THAN!)" << endl;
-    string deleteSQL = "DELETE FROM nhanvien;";
-    return ExecuteQuery(deleteSQL);
-}
-
 // ======== UTILITY FUNCTIONS ========
 
 int DatabaseHelper::GetTotalNhanVien() {
@@ -484,65 +410,9 @@ int DatabaseHelper::GetTotalNhanVien() {
     }
 }
 
-// ======== ROLE-BASED QUERY OPERATIONS ========
+// ======== CLIENT PAYLOAD QUERY OPERATIONS ========
 
-bool DatabaseHelper::GetNhanVienByIdWithRole(int id, nhanvien& result, const string& currentUserRole) {
-    if (!IsConnected()) {
-        cerr << "[ERROR] Khong ket noi duoc database" << endl;
-        return false;
-    }
-
-    try {
-        sql::Connection* conn = (sql::Connection*)connection;
-        sql::PreparedStatement* pstmt = conn->prepareStatement(
-            "SELECT id, ten_nv, vai_tro, cccd_cipher, matkhau_cipher, sdt_cipher, luong_cipher "
-            "FROM nhanvien WHERE id = ?"
-        );
-        pstmt->setInt(1, id);
-
-        sql::ResultSet* res = pstmt->executeQuery();
-
-        if (res->next()) {
-            result.id = res->getInt("id");
-            result.ten_nv = res->getString("ten_nv");
-            result.vai_tro = res->getString("vai_tro");
-            
-            // Get encrypted data
-            string cccd_encrypted = res->getString("cccd_cipher");
-            string sdt_encrypted = res->getString("sdt_cipher");
-            string matkhau_encrypted = res->getString("matkhau_cipher");
-            string luong_encrypted = res->getString("luong_cipher");
-            
-            // Process: decrypt + mask using helper
-            string cccd_masked, sdt_masked, matkhau_masked, luong_masked;
-            ProcessNhanVienFieldsWithRole(cccd_encrypted, sdt_encrypted, matkhau_encrypted, luong_encrypted,
-                                         cccd_masked, sdt_masked, matkhau_masked, luong_masked,
-                                         currentUserRole);
-            
-            result.cccd_cipher = cccd_masked;
-            result.sdt_cipher = sdt_masked;
-            result.matkhau_cipher = matkhau_masked;
-            result.luong_cipher = luong_masked;
-
-            delete res;
-            delete pstmt;
-            cout << "[DATABASE] Query nhân viên ID: " << id << " (Role: " << currentUserRole << ") → Tìm thấy" << endl;
-            return true;
-        }
-
-        delete res;
-        delete pstmt;
-        cout << "[DATABASE] Query nhân viên ID: " << id << " → Không tìm thấy" << endl;
-        return false;
-    }
-    catch (sql::SQLException &e) {
-        cerr << "[ERROR] Lỗi query nhân viên: " << e.what() 
-             << " (Code: " << e.getErrorCode() << ")" << endl;
-        return false;
-    }
-}
-
-vector<nhanvien> DatabaseHelper::GetAllNhanVienWithRole(const string& currentUserRole) {
+vector<nhanvien> DatabaseHelper::GetAllNhanVienForClient() {
     vector<nhanvien> employees;
 
     if (!IsConnected()) {
@@ -572,9 +442,8 @@ vector<nhanvien> DatabaseHelper::GetAllNhanVienWithRole(const string& currentUse
             
             // Process: decrypt + mask using helper
             string cccd_masked, sdt_masked, matkhau_masked, luong_masked;
-            ProcessNhanVienFieldsWithRole(cccd_encrypted, sdt_encrypted, matkhau_encrypted, luong_encrypted,
-                                         cccd_masked, sdt_masked, matkhau_masked, luong_masked,
-                                         currentUserRole);
+            ProcessNhanVienFieldsForClient(cccd_encrypted, sdt_encrypted, matkhau_encrypted, luong_encrypted,
+                                           cccd_masked, sdt_masked, matkhau_masked, luong_masked);
             
             emp.cccd_cipher = cccd_masked;
             emp.sdt_cipher = sdt_masked;
@@ -586,69 +455,12 @@ vector<nhanvien> DatabaseHelper::GetAllNhanVienWithRole(const string& currentUse
 
         delete res;
         delete stmt;
-        cout << "[DATABASE] Lấy tất cả nhân viên (Role: " << currentUserRole << "): " 
+        cout << "[DATABASE] Lay tat ca nhan vien masked cho client: " 
              << employees.size() << " bản ghi" << endl;
         return employees;
     }
     catch (sql::SQLException &e) {
         cerr << "[ERROR] Lỗi lấy tất cả nhân viên: " << e.what() 
-             << " (Code: " << e.getErrorCode() << ")" << endl;
-        return employees;
-    }
-}
-
-vector<nhanvien> DatabaseHelper::GetNhanVienByRoleWithMask(const string& vai_tro, const string& currentUserRole) {
-    vector<nhanvien> employees;
-
-    if (!IsConnected()) {
-        cerr << "[ERROR] Khong ket noi duoc database" << endl;
-        return employees;
-    }
-
-    try {
-        sql::Connection* conn = (sql::Connection*)connection;
-        sql::PreparedStatement* pstmt = conn->prepareStatement(
-            "SELECT id, ten_nv, vai_tro, cccd_cipher, matkhau_cipher, sdt_cipher, luong_cipher "
-            "FROM nhanvien WHERE vai_tro = ? ORDER BY id ASC;"
-        );
-        pstmt->setString(1, vai_tro);
-
-        sql::ResultSet* res = pstmt->executeQuery();
-
-        while (res->next()) {
-            nhanvien emp;
-            emp.id = res->getInt("id");
-            emp.ten_nv = res->getString("ten_nv");
-            emp.vai_tro = res->getString("vai_tro");
-            
-            // Get encrypted data
-            string cccd_encrypted = res->getString("cccd_cipher");
-            string sdt_encrypted = res->getString("sdt_cipher");
-            string matkhau_encrypted = res->getString("matkhau_cipher");
-            string luong_encrypted = res->getString("luong_cipher");
-            
-            // Process: decrypt + mask using helper
-            string cccd_masked, sdt_masked, matkhau_masked, luong_masked;
-            ProcessNhanVienFieldsWithRole(cccd_encrypted, sdt_encrypted, matkhau_encrypted, luong_encrypted,
-                                         cccd_masked, sdt_masked, matkhau_masked, luong_masked,
-                                         currentUserRole);
-            
-            emp.cccd_cipher = cccd_masked;
-            emp.sdt_cipher = sdt_masked;
-            emp.matkhau_cipher = matkhau_masked;
-            emp.luong_cipher = luong_masked;
-            
-            employees.push_back(emp);
-        }
-
-        delete res;
-        delete pstmt;
-        cout << "[DATABASE] Lấy nhân viên theo vai trò '" << vai_tro 
-             << "' (Role: " << currentUserRole << "): " << employees.size() << " bản ghi" << endl;
-        return employees;
-    }
-    catch (sql::SQLException &e) {
-        cerr << "[ERROR] Lỗi lấy nhân viên theo vai trò: " << e.what() 
              << " (Code: " << e.getErrorCode() << ")" << endl;
         return employees;
     }

@@ -8,7 +8,10 @@
 #include <QComboBox>
 #include <QLineEdit>
 #include <memory>
-#include "../core/DatabaseHelper.h"
+#include <vector>
+#include "../../core/DatabaseHelper.h"
+
+class NetworkClient;
 
 // Forward declaration for auto-generated UI class
 namespace Ui {
@@ -19,7 +22,10 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
-    MainWindow(QWidget *parent = nullptr, const QString& userRole = "User");
+    MainWindow(std::shared_ptr<NetworkClient> networkClient,
+               QWidget *parent = nullptr,
+               const QString& userRole = "User",
+               const QString& userName = "");
     ~MainWindow();
 
 private slots:
@@ -33,7 +39,6 @@ private slots:
 
 private:
     void setupConnections();
-    void initializeDatabase();
     void loadEmployeeData();
     void applyStyles();
     void updateStatistics();
@@ -42,12 +47,14 @@ private:
     // UI Components - managed by Ui::MainWindow
     Ui::MainWindow *ui;
     
-    // Database helper
-    std::unique_ptr<DatabaseHelper> dbHelper;
+    // Network client
+    std::shared_ptr<NetworkClient> networkClient;
     
     // State management
     QString currentUserRole;
+    QString currentUserName;
     int selectedEmployeeId;
+    std::vector<nhanvien> currentEmployees;
 };
 
 #endif // MAINWINDOW_H

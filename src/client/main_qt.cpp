@@ -1,6 +1,6 @@
 #include <QApplication>
-#include "ui/MainWindow.h"
-#include "ui/LoginDialog.h"
+#include "gui/MainWindow.h"
+#include "gui/LoginDialog.h"
 #include <iostream>
 
 int main(int argc, char *argv[]) {
@@ -30,8 +30,8 @@ int main(int argc, char *argv[]) {
     
     std::cout << "[INFO] User logged in - Role: " << loginResult.userRole.toStdString() << std::endl;
     
-    // Create main window with user role
-    MainWindow window(nullptr, loginResult.userRole);
+    // Create main window with connected GUI client
+    MainWindow window(loginResult.networkClient, nullptr, loginResult.userRole, loginResult.userName);
     window.show();
     
     std::cout << "[INFO] Application started" << std::endl;

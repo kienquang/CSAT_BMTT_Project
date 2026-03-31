@@ -34,6 +34,7 @@ desktop.ini
 *.log
 *.swp
 *~
+.env
 
 # Database
 *.db
