@@ -1,38 +1,94 @@
 #include "MainWindow.h"
-#include "ui_MainWindow.h"
-#include "EmployeeDialog.h"
-#include "../network/NetworkClient.h"
-#include <algorithm>
-#include <QMessageBox>
-#include <QApplication>
-#include <QTableWidgetItem>
-#include <QHeaderView>
-#include <iostream>
 
-MainWindow::MainWindow(std::shared_ptr<NetworkClient> networkClient, QWidget *parent, const QString& userRole, const QString& userName)
+#include "EmployeeDialog.h"
+#include "ui_MainWindow.h"
+#include "../network/NetworkClient.h"
+
+#include <QApplication>
+#include <QHeaderView>
+#include <QMessageBox>
+#include <QTableWidgetItem>
+
+#include <iostream>
+#include <stdexcept>
+
+namespace {
+
+bool IsDigitsOnly(const QString& value) {
+    if (value.isEmpty()) {
+        return false;
+    }
+
+    for (const QChar ch : value) {
+        if (!ch.isDigit()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ValidateRecordData(const EmployeeDialog::RecordData& data, QString& error) {
+    if (data.username.isEmpty()) {
+        error = "Username cannot be empty.";
+        return false;
+    }
+
+    if (data.password.length() < 8) {
+        error = "Password must be at least 8 characters.";
+        return false;
+    }
+
+    if (data.cccd.length() != 12 || !IsDigitsOnly(data.cccd)) {
+        error = "CCCD must contain exactly 12 digits.";
+        return false;
+    }
+
+    if (data.phone.length() < 10 || !IsDigitsOnly(data.phone)) {
+        error = "Phone must contain at least 10 digits.";
+        return false;
+    }
+
+    if (!data.email.contains('@') || !data.email.contains('.')) {
+        error = "Email format is invalid.";
+        return false;
+    }
+
+    return true;
+}
+
+QString GenderToLabel(int gender) {
+    return gender == 2 ? "Female" : "Male";
+}
+
+QString RoleToLabel(int role) {
+    return role == 2 ? "Admin" : "User";
+}
+
+bool IsAdminRole(int role) {
+    return role == 2;
+}
+
+}  // namespace
+
+MainWindow::MainWindow(std::shared_ptr<NetworkClient> networkClient,
+                       QWidget* parent,
+                       const QString& username,
+                       int role)
     : QMainWindow(parent),
       ui(new Ui::MainWindow),
       networkClient(std::move(networkClient)),
-      currentUserRole(userRole),
-      currentUserName(userName),
-      selectedEmployeeId(-1)
-{
+      currentUsername(username),
+      currentRole(role),
+      selectedRecordId(-1),
+      hasLoadedRecord(false) {
     ui->setupUi(this);
-    
-    ui->roleDisplay->setText(QString("%1 (%2)").arg(currentUserName, currentUserRole));
-    
-    // Setup UI connections
+    ui->roleDisplay->setText(RoleToLabel(currentRole));
+
     setupConnections();
-    
-    // Apply styles
     applyStyles();
-    
-    // Load initial data
-    loadEmployeeData();
+    configureUiForRole();
+    loadProfileData();
     updateStatistics();
-    
-    // Control button visibility based on role
-    controlButtonVisibility();
 }
 
 MainWindow::~MainWindow() {
@@ -40,310 +96,232 @@ MainWindow::~MainWindow() {
 }
 
 void MainWindow::setupConnections() {
-    // Connect button signals to slots
-    connect(ui->addBtn, &QPushButton::clicked, this, &MainWindow::onAddEmployee);
-    connect(ui->editBtn, &QPushButton::clicked, this, &MainWindow::onEditEmployee);
-    connect(ui->deleteBtn, &QPushButton::clicked, this, &MainWindow::onDeleteEmployee);
+    connect(ui->addBtn, &QPushButton::clicked, this, &MainWindow::onRefreshProfile);
+    connect(ui->editBtn, &QPushButton::clicked, this, &MainWindow::onEditProfile);
+    connect(ui->deleteBtn, &QPushButton::clicked, this, &MainWindow::onDeleteAccount);
     connect(ui->logoutBtn, &QPushButton::clicked, this, &MainWindow::onLogout);
-    
-    // Connect search box
-    connect(ui->searchBox, &QLineEdit::textChanged,
-            this, &MainWindow::onSearch);
-    
-    // Connect table selection
-    connect(ui->employeeTable, &QTableWidget::itemSelectionChanged,
-            this, &MainWindow::onTableRowSelection);
+    connect(ui->searchBox, &QLineEdit::textChanged, this, &MainWindow::onSearch);
+    connect(ui->employeeTable, &QTableWidget::itemSelectionChanged, this, &MainWindow::onTableRowSelection);
+}
+
+bool MainWindow::isAdminMode() const {
+    return IsAdminRole(currentRole);
+}
+
+void MainWindow::configureUiForRole() {
+    if (isAdminMode()) {
+        ui->titleLabel->setText("Admin - Encrypted User Directory");
+        ui->addBtn->setText("Refresh Users");
+        ui->editBtn->setEnabled(false);
+        ui->deleteBtn->setEnabled(false);
+        ui->searchBox->setEnabled(true);
+        ui->searchBox->setPlaceholderText("Search encrypted user list...");
+        return;
+    }
+
+    ui->titleLabel->setText("User Dashboard (Coming Soon)");
+    ui->addBtn->setEnabled(false);
+    ui->editBtn->setEnabled(false);
+    ui->deleteBtn->setEnabled(false);
+    ui->searchBox->setEnabled(false);
+    ui->searchBox->setPlaceholderText("This interface will be available soon.");
+}
+
+void MainWindow::loadAdminUserList() {
+    ui->employeeTable->setRowCount(0);
+    ui->employeeTable->setColumnCount(8);
+    ui->employeeTable->setHorizontalHeaderLabels(QStringList{
+        "Record ID",
+        "User ID",
+        "Username",
+        "Role",
+        "Gender",
+        "CCCD",
+        "Phone",
+        "Email"
+    });
+
+    std::string error;
+    std::vector<PersonalRecord> records;
+    if (!networkClient->FetchEncryptedUserList(records, error)) {
+        throw std::runtime_error(error);
+    }
+
+    for (int i = 0; i < static_cast<int>(records.size()); ++i) {
+        const PersonalRecord& record = records[static_cast<size_t>(i)];
+        ui->employeeTable->insertRow(i);
+        ui->employeeTable->setItem(i, 0, new QTableWidgetItem(QString::number(record.recordId)));
+        ui->employeeTable->setItem(i, 1, new QTableWidgetItem(QString::number(record.userId)));
+        ui->employeeTable->setItem(i, 2, new QTableWidgetItem(QString::fromStdString(record.username)));
+        ui->employeeTable->setItem(i, 3, new QTableWidgetItem(RoleToLabel(record.role)));
+        ui->employeeTable->setItem(i, 4, new QTableWidgetItem(GenderToLabel(record.gender)));
+        ui->employeeTable->setItem(i, 5, new QTableWidgetItem(QString::fromStdString(record.cccd)));
+        ui->employeeTable->setItem(i, 6, new QTableWidgetItem(QString::fromStdString(record.phone)));
+        ui->employeeTable->setItem(i, 7, new QTableWidgetItem(QString::fromStdString(record.email)));
+    }
+
+    if (!records.empty()) {
+        ui->employeeTable->selectRow(0);
+        hasLoadedRecord = true;
+        selectedRecordId = records.front().recordId;
+    }
+}
+
+void MainWindow::loadNonAdminPlaceholder() {
+    ui->employeeTable->setRowCount(0);
+    ui->employeeTable->setColumnCount(1);
+    ui->employeeTable->setHorizontalHeaderLabels(QStringList{"Notice"});
+    ui->employeeTable->insertRow(0);
+    ui->employeeTable->setItem(0, 0, new QTableWidgetItem("Non-admin interface is temporarily empty."));
+    hasLoadedRecord = false;
+    selectedRecordId = -1;
 }
 
 void MainWindow::applyStyles() {
-    // Apply stylesheet to main window
     setStyleSheet(
         "QMainWindow { background-color: #ecf0f1; }"
         "QPushButton { padding: 5px 10px; border-radius: 3px; font-weight: bold; }"
         "QPushButton:hover { opacity: 0.8; }"
         "QTableWidget { background-color: white; }"
         "QLineEdit { padding: 5px; border: 1px solid #bdc3c7; border-radius: 3px; }"
-        "QComboBox { padding: 5px; border: 1px solid #bdc3c7; border-radius: 3px; }"
     );
+
+    setWindowTitle("CSAT_BMTT - Personal Record Vault");
 }
 
-void MainWindow::controlButtonVisibility() {
-    bool isAdmin = (currentUserRole == "Admin");
-    
-    // Only Admin can add/edit/delete employees
-    ui->addBtn->setEnabled(isAdmin);
-    ui->editBtn->setEnabled(isAdmin);
-    ui->deleteBtn->setEnabled(isAdmin);
-    
-    // Update title bar with role info
-    setWindowTitle(QString("CSAT_BMTT - Role: %1").arg(currentUserRole));
-    
-    std::cout << "[UI] Role-based controls applied - User Role: " << currentUserRole.toStdString() << std::endl;
-}
-
-void MainWindow::loadEmployeeData() {
+void MainWindow::loadProfileData() {
     if (!networkClient || !networkClient->IsConnected()) {
-        QMessageBox::warning(this, "Warning", "Server is not connected!");
+        QMessageBox::warning(this, "Warning", "Server is not connected.");
         return;
     }
-    
+
     ui->employeeTable->setRowCount(0);
-    
+    hasLoadedRecord = false;
+    selectedRecordId = -1;
+
     try {
-        std::string error;
-        currentEmployees.clear();
-        if (!networkClient->FetchAllEmployees(currentEmployees, error)) {
-            throw std::runtime_error(error);
-        }
-        
-        for (size_t i = 0; i < currentEmployees.size(); ++i) {
-            ui->employeeTable->insertRow(i);
-            ui->employeeTable->setItem(i, 0, 
-                new QTableWidgetItem(QString::number(currentEmployees[i].id)));
-            ui->employeeTable->setItem(i, 1,
-                new QTableWidgetItem(QString::fromStdString(currentEmployees[i].ten_nv)));
-            ui->employeeTable->setItem(i, 2,
-                new QTableWidgetItem(QString::fromStdString(currentEmployees[i].vai_tro)));
-            ui->employeeTable->setItem(i, 3,
-                new QTableWidgetItem(QString::fromStdString(currentEmployees[i].cccd_cipher)));
-            ui->employeeTable->setItem(i, 4,
-                new QTableWidgetItem(QString::fromStdString(currentEmployees[i].sdt_cipher)));
-            ui->employeeTable->setItem(i, 5,
-                new QTableWidgetItem(QString::fromStdString(currentEmployees[i].luong_cipher)));
-            ui->employeeTable->setItem(i, 6,
-                new QTableWidgetItem(QString::fromStdString(currentEmployees[i].matkhau_cipher)));
+        if (isAdminMode()) {
+            loadAdminUserList();
+        } else {
+            loadNonAdminPlaceholder();
         }
 
         ui->employeeTable->horizontalHeader()->stretchLastSection();
-        
     } catch (const std::exception& e) {
-        QMessageBox::critical(this, "Error", 
-                              QString("Failed to load employees: %1").arg(e.what()));
+        QMessageBox::critical(this, "Error",
+                              QString("Failed to load data: %1").arg(e.what()));
         std::cerr << "[ERROR] " << e.what() << std::endl;
     }
 }
 
 void MainWindow::updateStatistics() {
+    if (!isAdminMode()) {
+        ui->totalValue->setText("N/A");
+        return;
+    }
+
     if (!networkClient || !networkClient->IsConnected()) {
         return;
     }
-    
+
     try {
         std::string error;
-        int total = 0;
-        if (!networkClient->GetTotalEmployees(total, error)) {
+        int totalUsers = 0;
+        if (!networkClient->GetTotalUsers(totalUsers, error)) {
             throw std::runtime_error(error);
         }
-        ui->totalValue->setText(QString::number(total));
+        ui->totalValue->setText(QString::number(totalUsers));
     } catch (const std::exception& e) {
         std::cerr << "[ERROR] Failed to update statistics: " << e.what() << std::endl;
     }
 }
 
-// ===== SLOT IMPLEMENTATIONS =====
-
-void MainWindow::onAddEmployee() {
-    if (!networkClient || !networkClient->IsConnected()) {
-        QMessageBox::warning(this, "Warning", "Cannot add employee: Server not connected!");
-        return;
-    }
-    
-    // Create and show add employee dialog
-    EmployeeDialog dialog(EmployeeDialog::AddMode, this);
-    
-    if (dialog.exec() == QDialog::Accepted) {
-        EmployeeDialog::EmployeeData data = dialog.getEmployeeData();
-        
-        // Validate input
-        if (data.name.isEmpty()) {
-            QMessageBox::warning(this, "Validation Error", "Name cannot be empty!");
-            return;
-        }
-        
-        if (data.cccd.length() != 12 || !data.cccd.toLongLong(nullptr, 10)) {
-            QMessageBox::warning(this, "Validation Error", 
-                QString("CCCD must be 12 digits! (Current length: %1)").arg(data.cccd.length()));
-            return;
-        }
-        
-        if (data.phone.length() != 10 || !data.phone.toLongLong(nullptr, 10)) {
-            QMessageBox::warning(this, "Validation Error", 
-                QString("Phone must be 10 digits! (Current length: %1)").arg(data.phone.length()));
-            return;
-        }
-        
-        if (data.password.isEmpty()) {
-            QMessageBox::warning(this, "Validation Error", "Password cannot be empty!");
-            return;
-        }
-        
-        if (data.salary.isEmpty() || data.salary.toDouble() < 0) {
-            QMessageBox::warning(this, "Validation Error", "Salary must be a valid positive number!");
-            return;
-        }
-        
-        try {
-            nhanvien employee;
-            employee.id = -1;
-            employee.ten_nv = data.name.toStdString();
-            employee.vai_tro = data.role.toStdString();
-            employee.cccd_cipher = data.cccd.toStdString();
-            employee.sdt_cipher = data.phone.toStdString();
-            employee.luong_cipher = data.salary.toStdString();
-
-            std::string error;
-            if (networkClient->AddEmployee(employee, data.password.toStdString(), error)) {
-                QMessageBox::information(this, "Success", "Employee added successfully!");
-                loadEmployeeData();
-                updateStatistics();
-            } else {
-                QMessageBox::warning(this, "Error",
-                                     QString("Failed to add employee: %1").arg(QString::fromStdString(error)));
-            }
-        } catch (const std::exception& e) {
-            QMessageBox::critical(this, "Error",
-                                  QString("Add employee operation failed: %1").arg(e.what()));
-        }
-    }
+void MainWindow::onRefreshProfile() {
+    loadProfileData();
+    updateStatistics();
 }
 
-void MainWindow::onEditEmployee() {
-    if (selectedEmployeeId == -1) {
-        QMessageBox::warning(this, "Warning", "Please select an employee to edit!");
+void MainWindow::onEditProfile() {
+    if (isAdminMode()) {
+        QMessageBox::information(this, "Read-only", "Admin view currently supports encrypted user listing only.");
         return;
     }
-    
-    if (!networkClient || !networkClient->IsConnected()) {
-        QMessageBox::warning(this, "Warning", "Cannot edit employee: Server not connected!");
+
+    if (!hasLoadedRecord || selectedRecordId == -1) {
+        QMessageBox::warning(this, "Warning", "No profile is loaded.");
         return;
     }
-    
-    try {
-        auto it = std::find_if(currentEmployees.begin(), currentEmployees.end(),
-                               [this](const nhanvien& employee) { return employee.id == selectedEmployeeId; });
-        if (it == currentEmployees.end()) {
-            QMessageBox::warning(this, "Error", "Selected employee is not available.");
-            return;
-        }
-        
-        const bool serverSentMaskedData = (currentUserRole != "Admin");
-        if (serverSentMaskedData) {
-            QMessageBox::information(this, "Security Notice",
-                                     "Sensitive fields are only sent masked from the server.\n"
-                                     "Please re-enter CCCD, phone, password, and salary to update this employee.");
-        }
 
-        EmployeeDialog dialog(EmployeeDialog::EditMode, this);
-        
-        EmployeeDialog::EmployeeData currentData;
-        currentData.name = QString::fromStdString(it->ten_nv);
-        currentData.role = QString::fromStdString(it->vai_tro);
-        currentData.cccd = serverSentMaskedData ? "" : QString::fromStdString(it->cccd_cipher);
-        currentData.phone = serverSentMaskedData ? "" : QString::fromStdString(it->sdt_cipher);
-        currentData.password = serverSentMaskedData ? "" : QString::fromStdString(it->matkhau_cipher);
-        currentData.salary = serverSentMaskedData ? "" : QString::fromStdString(it->luong_cipher);
-        
-        dialog.setEmployeeData(currentData);
-        
-        if (dialog.exec() == QDialog::Accepted) {
-            EmployeeDialog::EmployeeData newData = dialog.getEmployeeData();
-            
-            // Validate input
-            if (newData.name.isEmpty()) {
-                QMessageBox::warning(this, "Validation Error", "Name cannot be empty!");
-                return;
-            }
-            
-            if (newData.cccd.length() != 12 || !newData.cccd.toLongLong(nullptr, 10)) {
-                QMessageBox::warning(this, "Validation Error", 
-                    QString("CCCD must be 12 digits! (Current length: %1)").arg(newData.cccd.length()));
-                return;
-            }
-            
-            if (newData.phone.length() != 10 || !newData.phone.toLongLong(nullptr, 10)) {
-                QMessageBox::warning(this, "Validation Error", 
-                    QString("Phone must be 10 digits! (Current length: %1)").arg(newData.phone.length()));
-                return;
-            }
-            
-            if (newData.password.isEmpty()) {
-                QMessageBox::warning(this, "Validation Error", "Password cannot be empty!");
-                return;
-            }
-            
-            if (newData.salary.isEmpty() || newData.salary.toDouble() < 0) {
-                QMessageBox::warning(this, "Validation Error", "Salary must be a valid positive number!");
-                return;
-            }
-            
-            nhanvien employee;
-            employee.id = selectedEmployeeId;
-            employee.ten_nv = newData.name.toStdString();
-            employee.vai_tro = newData.role.toStdString();
-            employee.cccd_cipher = newData.cccd.toStdString();
-            employee.sdt_cipher = newData.phone.toStdString();
-            employee.luong_cipher = newData.salary.toStdString();
+    EmployeeDialog dialog(EmployeeDialog::EditMode, this);
+    EmployeeDialog::RecordData data;
+    data.username = QString::fromStdString(currentRecord.username);
+    data.gender = currentRecord.gender;
+    data.cccd = QString::fromStdString(currentRecord.cccd);
+    data.phone = QString::fromStdString(currentRecord.phone);
+    data.email = QString::fromStdString(currentRecord.email);
+    dialog.setRecordData(data);
 
-            std::string error;
-            if (networkClient->UpdateEmployee(employee, newData.password.toStdString(), error)) {
-                QMessageBox::information(this, "Success", "Employee updated successfully!");
-                loadEmployeeData();
-                updateStatistics();
-                selectedEmployeeId = -1;
-            } else {
-                QMessageBox::warning(this, "Error",
-                                     QString("Failed to update employee: %1").arg(QString::fromStdString(error)));
-            }
-        }
-    } catch (const std::exception& e) {
-        QMessageBox::critical(this, "Error",
-                              QString("Edit operation failed: %1").arg(e.what()));
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
     }
+
+    const EmployeeDialog::RecordData updated = dialog.getRecordData();
+    QString validationError;
+    if (!ValidateRecordData(updated, validationError)) {
+        QMessageBox::warning(this, "Validation Error", validationError);
+        return;
+    }
+
+    PersonalRecord record = currentRecord;
+    record.username = updated.username.toStdString();
+    record.gender = updated.gender;
+    record.cccd = updated.cccd.toStdString();
+    record.phone = updated.phone.toStdString();
+    record.email = updated.email.toStdString();
+
+    std::string error;
+    if (!networkClient->UpdateProfile(record, updated.password.toStdString(), error)) {
+        QMessageBox::critical(this, "Update Failed", QString::fromStdString(error));
+        return;
+    }
+
+    QMessageBox::information(this, "Success", "Profile updated successfully.");
+    loadProfileData();
 }
 
-void MainWindow::onDeleteEmployee() {
-    if (selectedEmployeeId == -1) {
-        QMessageBox::warning(this, "Warning", "Please select an employee to delete!");
+void MainWindow::onDeleteAccount() {
+    if (isAdminMode()) {
+        QMessageBox::information(this, "Read-only", "Admin view currently supports encrypted user listing only.");
         return;
     }
-    
-    if (!networkClient || !networkClient->IsConnected()) {
-        QMessageBox::warning(this, "Warning", "Cannot delete employee: Server not connected!");
+
+    if (!hasLoadedRecord) {
+        QMessageBox::warning(this, "Warning", "No account is loaded.");
         return;
     }
-    
-    // Confirm deletion
-    QMessageBox::StandardButton reply = QMessageBox::question(this, "Confirm Delete",
-                                                               QString("Delete employee with ID %1?").arg(selectedEmployeeId),
-                                                               QMessageBox::Yes | QMessageBox::No);
-    
-    if (reply == QMessageBox::No) {
+
+    const QMessageBox::StandardButton reply =
+        QMessageBox::question(this, "Delete Account",
+                              "Delete this account and its encrypted personal record?",
+                              QMessageBox::Yes | QMessageBox::No);
+
+    if (reply != QMessageBox::Yes) {
         return;
     }
-    
-    try {
-        std::string error;
-        if (networkClient->DeleteEmployee(selectedEmployeeId, error)) {
-            QMessageBox::information(this, "Success", "Employee deleted successfully!");
-            loadEmployeeData();
-            updateStatistics();
-            selectedEmployeeId = -1;
-        } else {
-            QMessageBox::warning(this, "Error",
-                                 QString("Failed to delete employee: %1").arg(QString::fromStdString(error)));
-        }
-    } catch (const std::exception& e) {
-        QMessageBox::critical(this, "Error",
-                              QString("Delete operation failed: %1").arg(e.what()));
+
+    std::string error;
+    if (!networkClient->DeleteAccount(error)) {
+        QMessageBox::critical(this, "Delete Failed", QString::fromStdString(error));
+        return;
     }
+
+    QMessageBox::information(this, "Account Deleted", "Your account has been deleted.");
+    QApplication::quit();
 }
 
 void MainWindow::onSearch(const QString& searchText) {
-    // Hide/show rows based on search text
     for (int i = 0; i < ui->employeeTable->rowCount(); ++i) {
         bool found = false;
-        
-        // Search in all columns
         for (int j = 0; j < ui->employeeTable->columnCount(); ++j) {
             QTableWidgetItem* item = ui->employeeTable->item(i, j);
             if (item && item->text().contains(searchText, Qt::CaseInsensitive)) {
@@ -351,16 +329,16 @@ void MainWindow::onSearch(const QString& searchText) {
                 break;
             }
         }
-        
         ui->employeeTable->setRowHidden(i, !found);
     }
 }
 
 void MainWindow::onLogout() {
-    QMessageBox::StandardButton reply = QMessageBox::question(this, "Logout",
-                                                               "Are you sure you want to logout?",
-                                                               QMessageBox::Yes | QMessageBox::No);
-    
+    const QMessageBox::StandardButton reply =
+        QMessageBox::question(this, "Logout",
+                              "Are you sure you want to logout?",
+                              QMessageBox::Yes | QMessageBox::No);
+
     if (reply == QMessageBox::Yes) {
         if (networkClient && networkClient->IsConnected()) {
             std::string error;
@@ -371,15 +349,11 @@ void MainWindow::onLogout() {
 }
 
 void MainWindow::onTableRowSelection() {
-    // Get selected row
-    QList<QTableWidgetItem*> selected = ui->employeeTable->selectedItems();
-    
+    const QList<QTableWidgetItem*> selected = ui->employeeTable->selectedItems();
     if (!selected.isEmpty()) {
-        int row = selected.first()->row();
-        QTableWidgetItem* idItem = ui->employeeTable->item(row, 0);
-        
+        QTableWidgetItem* idItem = ui->employeeTable->item(selected.first()->row(), 0);
         if (idItem) {
-            selectedEmployeeId = idItem->text().toInt();
+            selectedRecordId = idItem->text().toInt();
         }
     }
 }

@@ -233,15 +233,17 @@ string Blowfish::EncryptString(const string& text) {
     }
 
     stringstream hexStream;
+
     for (size_t i = 0; i < paddedText.length(); i += 8) {
         uint32_t L = (paddedText[i] << 24) | (paddedText[i + 1] << 16) | (paddedText[i + 2] << 8) | paddedText[i + 3];
         uint32_t R = (paddedText[i + 4] << 24) | (paddedText[i + 5] << 16) | (paddedText[i + 6] << 8) | paddedText[i + 7];
-        
+
         EncryptBlock(L, R);
-        
+
         hexStream << setfill('0') << setw(8) << hex << L;
         hexStream << setfill('0') << setw(8) << hex << R;
     }
+
     return hexStream.str();
 }
 
@@ -258,7 +260,7 @@ string Blowfish::DecryptString(const string& hexText) {
         result += (char)(L >> 24); result += (char)(L >> 16); result += (char)(L >> 8); result += (char)L;
         result += (char)(R >> 24); result += (char)(R >> 16); result += (char)(R >> 8); result += (char)R;
     }
-    
+
     result.erase(find(result.begin(), result.end(), '\0'), result.end());
     return result;
 }

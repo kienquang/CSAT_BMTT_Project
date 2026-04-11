@@ -1,50 +1,50 @@
 #ifndef EMPLOYEEDIALOG_H
 #define EMPLOYEEDIALOG_H
 
+#include <QComboBox>
 #include <QDialog>
 #include <QLineEdit>
-#include <QComboBox>
 #include <QPushButton>
 
 class EmployeeDialog : public QDialog {
     Q_OBJECT
 
 public:
-    struct EmployeeData {
-        QString name;
-        QString role;
+    struct RecordData {
+        QString username;
+        int gender = 1;
         QString cccd;
         QString phone;
+        QString email;
         QString password;
-        QString salary;
     };
 
     enum Mode {
-        AddMode,
+        RegisterMode,
         EditMode
     };
 
-    EmployeeDialog(Mode mode, QWidget *parent = nullptr);
+    EmployeeDialog(Mode mode, QWidget* parent = nullptr);
     ~EmployeeDialog();
 
-    EmployeeData getEmployeeData() const;
-    void setEmployeeData(const EmployeeData& data);
+    RecordData getRecordData() const;
+    void setRecordData(const RecordData& data);
 
 private:
     void setupUi();
     void connectSignals();
 
     Mode mode;
-    
-    QLineEdit *nameEdit;
-    QComboBox *roleCombo;
-    QLineEdit *cccdEdit;
-    QLineEdit *phoneEdit;
-    QLineEdit *passwordEdit;
-    QLineEdit *salaryEdit;
-    
-    QPushButton *saveBtn;
-    QPushButton *cancelBtn;
+
+    QLineEdit* usernameEdit;
+    QComboBox* genderCombo;
+    QLineEdit* cccdEdit;
+    QLineEdit* phoneEdit;
+    QLineEdit* emailEdit;
+    QLineEdit* passwordEdit;
+
+    QPushButton* saveBtn;
+    QPushButton* cancelBtn;
 };
 
-#endif // EMPLOYEEDIALOG_H
+#endif  // EMPLOYEEDIALOG_H

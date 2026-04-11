@@ -3,69 +3,94 @@
 
 #include <string>
 #include <vector>
-#include "Blowfish.h"
-#include "MaskingLogic.h"
-#include "EncryptionConfig.h"
 
-using namespace std;
+struct PersonalRecord {
+    int userId = -1;
+    int recordId = -1;
+    std::string username;
+    int role = 1;
+    int gender = 0;
+    std::string cccd;
+    std::string phone;
+    std::string email;
+    std::string encryptedDek;
+};
 
-struct nhanvien {
-    int id;
-    string ten_nv;
-    string vai_tro;
-    string cccd_cipher;
-    string sdt_cipher;
-    string matkhau_cipher;
-    string luong_cipher;
+struct AuthenticatedUser {
+    int id = -1;
+    std::string username;
+    int role = 1;
+
+    bool IsValid() const {
+        return id >= 0;
+    }
 };
 
 class DatabaseHelper {
 private:
-    string HOST;
+    std::string HOST;
     int PORT;
-    string USER;
-    string PASSWORD;
-    string DATABASE;
+    std::string USER;
+    std::string PASSWORD;
+    std::string DATABASE;
     void* connection;
 
-    bool ExecuteQuery(const string& query);
-    void EncryptNhanVienData(const string& cccd, const string& sdt,
-                             const string& matkhau, const string& luong,
-                             string& cccd_encrypted, string& sdt_encrypted,
-                             string& matkhau_encrypted, string& luong_encrypted);
-    void DecryptNhanVienData(const string& cccd_encrypted, const string& sdt_encrypted,
-                             const string& matkhau_encrypted, const string& luong_encrypted,
-                             string& cccd_plain, string& sdt_plain,
-                             string& matkhau_plain, string& luong_plain);
-    void ApplyClientMasking(string& cccd, string& sdt, string& matkhau, string& luong);
-    void ProcessNhanVienFieldsForClient(const string& cccd_encrypted, const string& sdt_encrypted,
-                                        const string& matkhau_encrypted, const string& luong_encrypted,
-                                        int requesterRole,
-                                        string& cccd_masked, string& sdt_masked,
-                                        string& matkhau_masked, string& luong_masked);
+    bool ExecuteQuery(const std::string& query);
+    std::string GenerateRandomDek() const;
+    std::string WrapDek(const std::string& dekPlaintext, const std::string& kek) const;
+    std::string UnwrapDek(const std::string& encryptedDek, const std::string& kek) const;
+    void EncryptPersonalData(const std::string& dekPlaintext,
+                             const std::string& cccdPlaintext,
+                             const std::string& phonePlaintext,
+                             const std::string& emailPlaintext,
+                             std::string& cccdCiphertext,
+                             std::string& phoneCiphertext,
+                             std::string& emailCiphertext) const;
+    void DecryptPersonalData(const std::string& dekPlaintext,
+                             const std::string& cccdCiphertext,
+                             const std::string& phoneCiphertext,
+                             const std::string& emailCiphertext,
+                             std::string& cccdPlaintext,
+                             std::string& phonePlaintext,
+                             std::string& emailPlaintext) const;
+    bool BootstrapDefaultUser();
 
 public:
-    DatabaseHelper(const string& host, int port,
-                   const string& user, const string& password,
-                   const string& database);
+    DatabaseHelper(const std::string& host, int port,
+                   const std::string& user, const std::string& password,
+                   const std::string& database);
     ~DatabaseHelper();
 
     bool Connect();
-    bool CreateTableNhanVien();
-    bool InsertNhanVien(const string& ten_nv, const string& vai_tro,
-                        const string& cccd_plaintext,
-                        const string& sdt_plaintext,
-                        const string& matkhau_plaintext,
-                        const string& luong_plaintext);
-    vector<nhanvien> GetAllNhanVienForClient(int requesterRole);
-    bool UpdateNhanVien(int id, const string& ten_nv, const string& vai_tro,
-                        const string& cccd_plaintext, const string& sdt_plaintext,
-                        const string& matkhau_plaintext, const string& luong_plaintext);
-    bool DeleteNhanVienById(int id);
-    int GetTotalNhanVien();
-    nhanvien AuthenticateUser(const string& cccd_plaintext, const string& matkhau_plaintext);
+    bool InitializeSchema();
+    bool RegisterUser(const std::string& username,
+                      const std::string& passwordPlaintext,
+                      int gender,
+                      const std::string& cccdPlaintext,
+                      const std::string& phonePlaintext,
+                      const std::string& emailPlaintext,
+                      int role = 1);
+    bool GetPersonalRecordForUser(int userId,
+                                  const std::string& sessionKek,
+                                  PersonalRecord& record);
+    bool UpdatePersonalRecordForUser(int userId,
+                                     const std::string& currentSessionKek,
+                                     const std::string& newUsername,
+                                     const std::string& newPasswordPlaintext,
+                                     bool updatePassword,
+                                     int newGender,
+                                     const std::string& newCccdPlaintext,
+                                     const std::string& newPhonePlaintext,
+                                     const std::string& newEmailPlaintext,
+                                     std::string& updatedSessionKek);
+    bool DeleteUserById(int userId);
+    int GetTotalUsers();
+    bool GetEncryptedUserRecordByOffset(int offset, PersonalRecord& record);
+    AuthenticatedUser AuthenticateUser(const std::string& username,
+                                       const std::string& passwordPlaintext,
+                                       std::string& derivedSessionKek);
     bool IsConnected();
     void Disconnect();
 };
 
-#endif
+#endif  // DATABASE_HELPER_H

@@ -1,69 +1,68 @@
 #include "EmployeeDialog.h"
-#include <QVBoxLayout>
+
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QLineEdit>
-#include <QComboBox>
-#include <QPushButton>
-#include <QMessageBox>
+#include <QVBoxLayout>
 
-EmployeeDialog::EmployeeDialog(Mode mode, QWidget *parent)
-    : QDialog(parent), mode(mode)
-{
-    setWindowTitle(mode == AddMode ? "Add New Employee" : "Edit Employee");
+EmployeeDialog::EmployeeDialog(Mode mode, QWidget* parent)
+    : QDialog(parent), mode(mode) {
+    setWindowTitle(mode == RegisterMode ? "Register New Account" : "Edit Personal Profile");
     setModal(true);
-    setMinimumWidth(400);
-    
+    setMinimumWidth(420);
+
     setupUi();
     connectSignals();
 }
 
-EmployeeDialog::~EmployeeDialog() {}
+EmployeeDialog::~EmployeeDialog() {
+}
 
 void EmployeeDialog::setupUi() {
-    QVBoxLayout *mainLayout = new QVBoxLayout(this);
-    
-    // Name
-    mainLayout->addWidget(new QLabel("Name:"));
-    nameEdit = new QLineEdit;
-    mainLayout->addWidget(nameEdit);
-    
-    // Role
-    mainLayout->addWidget(new QLabel("Role:"));
-    roleCombo = new QComboBox;
-    roleCombo->addItem("Admin");
-    roleCombo->addItem("User");
-    mainLayout->addWidget(roleCombo);
-    
-    // CCCD
+    QVBoxLayout* mainLayout = new QVBoxLayout(this);
+
+    mainLayout->addWidget(new QLabel("Username:"));
+    usernameEdit = new QLineEdit;
+    usernameEdit->setPlaceholderText("Enter login username");
+    mainLayout->addWidget(usernameEdit);
+
+    mainLayout->addWidget(new QLabel("Gender:"));
+    genderCombo = new QComboBox;
+    genderCombo->addItem("Male", 1);
+    genderCombo->addItem("Female", 2);
+    mainLayout->addWidget(genderCombo);
+
     mainLayout->addWidget(new QLabel("CCCD (12 digits):"));
     cccdEdit = new QLineEdit;
+    cccdEdit->setPlaceholderText("Enter CCCD");
     mainLayout->addWidget(cccdEdit);
-    
-    // Phone
-    mainLayout->addWidget(new QLabel("Phone (10 digits):"));
+
+    mainLayout->addWidget(new QLabel("Phone (>=10 digits):"));
     phoneEdit = new QLineEdit;
+    phoneEdit->setPlaceholderText("Enter phone number");
     mainLayout->addWidget(phoneEdit);
-    
-    // Password
-    mainLayout->addWidget(new QLabel("Password:"));
+
+    mainLayout->addWidget(new QLabel("Email:"));
+    emailEdit = new QLineEdit;
+    emailEdit->setPlaceholderText("Enter email address");
+    mainLayout->addWidget(emailEdit);
+
+    mainLayout->addWidget(new QLabel(mode == RegisterMode
+                                         ? "Password:"
+                                         : "Password (enter again to re-wrap DEK):"));
     passwordEdit = new QLineEdit;
     passwordEdit->setEchoMode(QLineEdit::Password);
+    passwordEdit->setPlaceholderText(mode == RegisterMode
+                                         ? "Enter password"
+                                         : "Enter your current or new password");
     mainLayout->addWidget(passwordEdit);
-    
-    // Salary
-    mainLayout->addWidget(new QLabel("Salary:"));
-    salaryEdit = new QLineEdit;
-    mainLayout->addWidget(salaryEdit);
-    
-    // Buttons
-    QHBoxLayout *btnLayout = new QHBoxLayout;
-    saveBtn = new QPushButton("Save");
+
+    QHBoxLayout* buttonLayout = new QHBoxLayout;
+    saveBtn = new QPushButton(mode == RegisterMode ? "Register" : "Save");
     cancelBtn = new QPushButton("Cancel");
-    btnLayout->addWidget(saveBtn);
-    btnLayout->addWidget(cancelBtn);
-    mainLayout->addLayout(btnLayout);
-    
+    buttonLayout->addWidget(saveBtn);
+    buttonLayout->addWidget(cancelBtn);
+    mainLayout->addLayout(buttonLayout);
+
     setLayout(mainLayout);
 }
 
@@ -72,22 +71,23 @@ void EmployeeDialog::connectSignals() {
     connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
 }
 
-EmployeeDialog::EmployeeData EmployeeDialog::getEmployeeData() const {
+EmployeeDialog::RecordData EmployeeDialog::getRecordData() const {
     return {
-        nameEdit->text(),
-        roleCombo->currentText(),
-        cccdEdit->text(),
-        phoneEdit->text(),
-        passwordEdit->text(),
-        salaryEdit->text()
+        usernameEdit->text().trimmed(),
+        genderCombo->currentData().toInt(),
+        cccdEdit->text().trimmed(),
+        phoneEdit->text().trimmed(),
+        emailEdit->text().trimmed(),
+        passwordEdit->text()
     };
 }
 
-void EmployeeDialog::setEmployeeData(const EmployeeData& data) {
-    nameEdit->setText(data.name);
-    roleCombo->setCurrentText(data.role);
+void EmployeeDialog::setRecordData(const RecordData& data) {
+    usernameEdit->setText(data.username);
+    const int genderIndex = genderCombo->findData(data.gender);
+    genderCombo->setCurrentIndex(genderIndex >= 0 ? genderIndex : 0);
     cccdEdit->setText(data.cccd);
     phoneEdit->setText(data.phone);
-    passwordEdit->setText(data.password);
-    salaryEdit->setText(data.salary);
+    emailEdit->setText(data.email);
+    passwordEdit->clear();
 }

@@ -13,32 +13,35 @@ class LoginDialog : public QDialog {
 
 public:
     struct LoginResult {
-        bool success;
-        QString userRole;    // "Admin" or "User"
-        int userId;
-        QString userName;
+        bool success = false;
+        int userId = -1;
+        int role = 1;
+        QString username;
         std::shared_ptr<NetworkClient> networkClient;
     };
 
-    LoginDialog(QWidget *parent = nullptr);
+    LoginDialog(QWidget* parent = nullptr);
     ~LoginDialog();
 
     LoginResult getLoginResult() const { return loginResult; }
 
 private slots:
     void onLoginClicked();
+    void onRegisterClicked();
     void onCancelClicked();
 
 private:
     void setupUi();
+
     LoginResult loginResult;
-    
-    QLineEdit *cccdEdit;
-    QLineEdit *passwordEdit;
-    QPushButton *loginBtn;
-    QPushButton *cancelBtn;
-    
+
+    QLineEdit* usernameEdit;
+    QLineEdit* passwordEdit;
+    QPushButton* loginBtn;
+    QPushButton* registerBtn;
+    QPushButton* cancelBtn;
+
     std::shared_ptr<NetworkClient> networkClient;
 };
 
-#endif // LOGINDIALOG_H
+#endif  // LOGINDIALOG_H

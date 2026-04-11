@@ -1,170 +1,73 @@
-# Quick Reference - Qt6 GUI Application
+# Quick Reference - Personal Record Vault
 
-## ⚡ 3 Bước Nhanh Nhất
+## Overview
 
-### 1️⃣ Cài Qt6
-```bash
-# Tải từ https://www.qt.io/download
-# Chọn Qt 6.7 LTS + MSVC 2022 → Cài tại C:\Qt\6.7
+The project now runs as a Qt GUI client talking to a TCP server.
+
+- Authentication table: `users`
+- Vault table: `personal_records`
+- Password storage: `Argon2id`
+- Record encryption: Blowfish with per-record DEK
+- DEK wrapping: KEK derived from the user's password at login time
+
+## Build
+
+```powershell
+cd C:\Users\ADMIN\Desktop\CSAT_BMTT_Project-main
+cmake --build Build --config Release
 ```
 
-### 2️⃣ Build
-```bash
-cd c:\Users\ADMIN\Desktop\CSAT_BMTT_Project-main
-rmdir /s /q Build
-mkdir Build
-cd Build
-cmake .. -DCMAKE_PREFIX_PATH=C:/Qt/6.7/msvc2022_64 -G "Visual Studio 17 2022" -DBUILD_QT_GUI=ON
-cmake --build . --config Release -j4
+Output:
+
+- `Build\bin\Release\Server.exe`
+- `Build\bin\Release\CSATApp.exe`
+
+## Run
+
+```powershell
+.\scripts\run_server.bat
+.\scripts\run_client.bat
 ```
 
-### 3️⃣ Chạy
-```bash
-cd bin/Release
-CSATApp.exe
-```
+## Runtime Config
 
----
+Set values in `.env`:
 
-## 📁 File Cần Biết
+- `APP_SERVER_HOST`
+- `APP_SERVER_PORT`
+- `APP_DB_HOST`
+- `APP_DB_PORT`
+- `APP_DB_USER`
+- `APP_DB_PASSWORD`
+- `APP_DB_NAME`
+- `APP_LOGIN_BLOWFISH_KEY`
 
-| File | Tác Dụng |
-|------|---------|
-| `src/ui/MainWindow.ui` | Qt Designer - drag drop UI |
-| `src/ui/MainWindow.h/cpp` | Logic chính |
-| `src/ui/EmployeeDialog.h/cpp` | Dialog thêm/sửa (future) |
-| `src/ui/StyleSheets.qss` | Styling (CSS-like) |
-| `src/apps/main_qt.cpp` | Entry point |
-| `CMakeLists.txt` | Qt configuration |
+## Default Bootstrap Account
 
----
+If the database has no users yet, the server creates:
 
-## 🎨 Chỉnh Sửa Giao Diện
+- username: `admin`
+- password: `admin12345`
 
-### Mở Qt Designer
-```bash
-cd src/ui
-# Kính Qt Creator → File → Open → MainWindow.ui
-```
+## Main Files
 
-### Workflow
-1. Open MainWindow.ui
-2. Drag-drop components
-3. Edit properties
-4. Save
-5. Rebuild: `cmake --build . --config Release`
+- `src/core/DatabaseHelper.*`: schema creation, user auth, DEK wrap/unwrap, record CRUD
+- `src/core/PasswordHasher.*`: Argon2id password hash and KEK derivation
+- `src/server/TCP_Server.cpp`: session login, session KEK in memory, profile endpoints
+- `src/client/network/NetworkClient.*`: TCP protocol client
+- `src/client/gui/LoginDialog.*`: login and registration
+- `src/client/gui/MainWindow.*`: self-service profile view/edit/delete
 
----
+## Current GUI Flow
 
-## 🔧 Thay Đổi Database Credentials
+1. Open `CSATApp.exe`
+2. Login with `username/password`
+3. View your personal record
+4. Edit your own profile
+5. Delete your own account if needed
 
-File: `src/ui/MainWindow.cpp` (dòng ~40)
+## Notes
 
-```cpp
-dbHelper = std::make_unique<DatabaseHelper>(
-    "localhost",    // Host
-    3306,           // Port
-    "root",         // User
-    "YOUR_PASSWORD", // ← Thay đổi
-    "CSAT_BMTT"     // Database
-);
-```
-
----
-
-## 🐛 Lỗi Phổ Biến
-
-| Lỗi | Giải Pháp |
-|-----|----------|
-| Qt6 not found | Check Qt path: `C:\Qt\6.7\msvc2022_64` |
-| mysqlcppconn.lib not found | Check MySQL path trong CMakeLists.txt |
-| Missing Qt DLLs | Check `Build/bin/Release/` có đầy đủ `Qt6*.dll` |
-| Database connection failed | Check credentials ở `src/ui/MainWindow.cpp` |
-
----
-
-## 📋 Kiểm Tra Từng Bước
-
-```bash
-# 1. Build thành công?
-cmake --build . --config Release
-
-# 2. Executable tồn tại?
-dir Build\bin\Release\CSATApp.exe
-
-# 3. Chạy được?
-Build\bin\Release\CSATApp.exe
-
-# 4. Database connect được?
-# Check console output khi chạy
-```
-
----
-
-## 🎯 Tính Năng Hiện Tại
-
-✅ Xem danh sách nhân viên
-✅ Role-based masking (Admin/User)
-✅ Tìm kiếm nhân viên
-✅ Xóa nhân viên
-✅ Thống kê tổng số
-
-🔙 TODO: Thêm/Sửa nhân viên (placeholder prepared)
-
----
-
-## 🚀 Next: Implement Add/Edit
-
-Trong `src/ui/MainWindow.cpp`, replace TODO:
-
-```cpp
-void MainWindow::onAddEmployee() {
-    EmployeeDialog dialog(EmployeeDialog::AddMode, this);
-    if (dialog.exec() == QDialog::Accepted) {
-        auto data = dialog.getEmployeeData();
-        // TODO: Call dbHelper->InsertNhanVien(...)
-        loadEmployeeData();
-    }
-}
-
-void MainWindow::onEditEmployee() {
-    EmployeeDialog dialog(EmployeeDialog::EditMode, this);
-    if (dialog.exec() == QDialog::Accepted) {
-        auto data = dialog.getEmployeeData();
-        // TODO: Call dbHelper->UpdateNhanVien(id, ...)
-        loadEmployeeData();
-    }
-}
-```
-
----
-
-## 📚 Tài Liệu
-
-| Loại | Link |
-|------|------|
-| Qt6 Doc | https://doc.qt.io/qt-6/ |
-| CMake Qt | https://cmake.org/cmake/help/latest/module/FindQt6.html |
-| Setup Guide | Xem `QT_GUI_SETUP.md` |
-| Implementation | Xem `IMPLEMENTATION_SUMMARY.md` |
-
----
-
-## ✅ Validation Script
-
-```cpp
-// Chạy CSATApp.exe và kiểm tra:
-1. ✅ Connection success message in console
-2. ✅ Employee table populated
-3. ✅ Role dropdown works (Admin/User)
-4. ✅ Change role → data re-masks automatically
-5. ✅ Search filter works
-6. ✅ Delete button confirms before deleting
-7. ✅ Total count updates
-8. ✅ No console errors
-```
-
----
-
-**Status**: ✅ Ready to use!
-**Next**: Cài Qt6 → Build → Run → Thêm features
+- The server does not store KEK.
+- KEK is derived from the login password and kept only for the active session.
+- The old admin/user masking model is no longer used.
