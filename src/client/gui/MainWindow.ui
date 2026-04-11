@@ -61,6 +61,19 @@
        </widget>
       </item>
       <item>
+         <widget class="QPushButton" name="viewMyInfoBtn">
+          <property name="maximumWidth">
+           <number>170</number>
+          </property>
+          <property name="text">
+           <string>Xem thông tin của tôi</string>
+          </property>
+          <property name="styleSheet">
+           <string notr="true">background-color: #16a085; color: white; font-weight: bold;</string>
+          </property>
+         </widget>
+            </item>
+            <item>
        <widget class="QPushButton" name="logoutBtn">
         <property name="maximumWidth">
          <number>100</number>
@@ -116,6 +129,111 @@
       </item>
      </layout>
     </item>
+   <item>
+    <widget class="QTabWidget" name="adminTabWidget">
+     <property name="currentIndex">
+      <number>0</number>
+     </property>
+     <property name="maximumHeight">
+      <number>42</number>
+     </property>
+     <widget class="QWidget" name="userListTab">
+      <attribute name="title">
+      <string>Danh sách user</string>
+      </attribute>
+     </widget>
+     <widget class="QWidget" name="medicalListTab">
+      <attribute name="title">
+      <string>Danh sách bệnh án</string>
+      </attribute>
+     </widget>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="doctorCreateGroup">
+     <property name="title">
+      <string>Lập bệnh án mới</string>
+     </property>
+     <layout class="QVBoxLayout" name="doctorCreateLayout">
+      <item>
+       <layout class="QHBoxLayout" name="doctorCreateRow1">
+        <item>
+         <widget class="QLabel" name="patientIdLabel">
+          <property name="text">
+           <string>Patient ID:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="patientIdInput"/>
+        </item>
+        <item>
+         <widget class="QLabel" name="visitDateLabel">
+          <property name="text">
+           <string>Visit Date:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QDateEdit" name="visitDateInput">
+          <property name="calendarPopup">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="departmentLabel">
+          <property name="text">
+           <string>Department:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="departmentInput"/>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="QLabel" name="diagnosisLabel">
+        <property name="text">
+         <string>Diagnosis:</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QTextEdit" name="diagnosisInput">
+        <property name="maximumHeight">
+         <number>90</number>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="prescriptionLabel">
+        <property name="text">
+         <string>Prescription:</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QTextEdit" name="prescriptionInput">
+        <property name="maximumHeight">
+         <number>90</number>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="createMedicalRecordBtn">
+        <property name="text">
+         <string>Tạo bệnh án</string>
+        </property>
+        <property name="styleSheet">
+         <string notr="true">background-color: #16a085; color: white; font-weight: bold;</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
     <item>
      <widget class="QTableWidget" name="employeeTable">
       <property name="columnCount">

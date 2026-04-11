@@ -5,7 +5,9 @@
 #include "../network/NetworkClient.h"
 
 #include <QApplication>
+#include <QDate>
 #include <QHeaderView>
+#include <QInputDialog>
 #include <QMessageBox>
 #include <QTableWidgetItem>
 
@@ -30,6 +32,11 @@ bool IsDigitsOnly(const QString& value) {
 bool ValidateRecordData(const EmployeeDialog::RecordData& data, QString& error) {
     if (data.username.isEmpty()) {
         error = "Username cannot be empty.";
+        return false;
+    }
+
+    if (data.name.isEmpty()) {
+        error = "Full name cannot be empty.";
         return false;
     }
 
@@ -61,10 +68,30 @@ QString GenderToLabel(int gender) {
 }
 
 QString RoleToLabel(int role) {
-    return role == 2 ? "Admin" : "User";
+    if (role == 2) {
+        return "Doctor";
+    }
+    if (role == 3) {
+        return "Admin";
+    }
+    return "User";
+}
+
+int LabelToRole(const QString& roleLabel) {
+    if (roleLabel.compare("Admin", Qt::CaseInsensitive) == 0) {
+        return 3;
+    }
+    if (roleLabel.compare("Doctor", Qt::CaseInsensitive) == 0) {
+        return 2;
+    }
+    return 1;
 }
 
 bool IsAdminRole(int role) {
+    return role == 3;
+}
+
+bool IsDoctorRole(int role) {
     return role == 2;
 }
 
@@ -80,6 +107,8 @@ MainWindow::MainWindow(std::shared_ptr<NetworkClient> networkClient,
       currentUsername(username),
       currentRole(role),
       selectedRecordId(-1),
+            selectedUserId(-1),
+            selectedUserRole(1),
       hasLoadedRecord(false) {
     ui->setupUi(this);
     ui->roleDisplay->setText(RoleToLabel(currentRole));
@@ -99,30 +128,93 @@ void MainWindow::setupConnections() {
     connect(ui->addBtn, &QPushButton::clicked, this, &MainWindow::onRefreshProfile);
     connect(ui->editBtn, &QPushButton::clicked, this, &MainWindow::onEditProfile);
     connect(ui->deleteBtn, &QPushButton::clicked, this, &MainWindow::onDeleteAccount);
+    connect(ui->viewMyInfoBtn, &QPushButton::clicked, this, &MainWindow::onViewMyInfo);
     connect(ui->logoutBtn, &QPushButton::clicked, this, &MainWindow::onLogout);
     connect(ui->searchBox, &QLineEdit::textChanged, this, &MainWindow::onSearch);
     connect(ui->employeeTable, &QTableWidget::itemSelectionChanged, this, &MainWindow::onTableRowSelection);
+    connect(ui->adminTabWidget, &QTabWidget::currentChanged, this, &MainWindow::onAdminTabChanged);
+    connect(ui->createMedicalRecordBtn, &QPushButton::clicked, this, &MainWindow::onCreateMedicalRecord);
 }
 
 bool MainWindow::isAdminMode() const {
     return IsAdminRole(currentRole);
 }
 
+bool MainWindow::isDoctorMode() const {
+    return IsDoctorRole(currentRole);
+}
+
+bool MainWindow::isAdminUsersTabActive() const {
+    return isAdminMode() && ui->adminTabWidget->currentIndex() == 0;
+}
+
+bool MainWindow::isDoctorListTabActive() const {
+    return isDoctorMode() && ui->adminTabWidget->currentIndex() == 0;
+}
+
+bool MainWindow::isDoctorCreateTabActive() const {
+    return isDoctorMode() && ui->adminTabWidget->currentIndex() == 1;
+}
+
 void MainWindow::configureUiForRole() {
     if (isAdminMode()) {
         ui->titleLabel->setText("Admin - Encrypted User Directory");
         ui->addBtn->setText("Refresh Users");
+        ui->addBtn->setVisible(true);
+        ui->editBtn->setVisible(true);
+        ui->deleteBtn->setVisible(true);
+        ui->editBtn->setText("Phân quyền");
+        ui->deleteBtn->setText("Xóa tài khoản");
         ui->editBtn->setEnabled(false);
         ui->deleteBtn->setEnabled(false);
+        ui->viewMyInfoBtn->setVisible(true);
+        ui->viewMyInfoBtn->setEnabled(true);
+        ui->adminTabWidget->setVisible(true);
+        ui->adminTabWidget->setEnabled(true);
+        ui->adminTabWidget->setTabText(0, "Danh sách user");
+        ui->adminTabWidget->setTabText(1, "Danh sách bệnh án");
+        ui->doctorCreateGroup->setVisible(false);
+        ui->employeeTable->setVisible(true);
         ui->searchBox->setEnabled(true);
         ui->searchBox->setPlaceholderText("Search encrypted user list...");
         return;
     }
 
+    if (isDoctorMode()) {
+        ui->titleLabel->setText("Doctor - Medical Record Workspace");
+        ui->addBtn->setText("Refresh Records");
+        ui->addBtn->setVisible(true);
+        ui->editBtn->setVisible(false);
+        ui->deleteBtn->setVisible(false);
+        ui->viewMyInfoBtn->setVisible(true);
+        ui->viewMyInfoBtn->setEnabled(true);
+        ui->adminTabWidget->setVisible(true);
+        ui->adminTabWidget->setEnabled(true);
+        ui->adminTabWidget->setTabText(0, "Bệnh án đã lập");
+        ui->adminTabWidget->setTabText(1, "Lập bệnh án");
+        ui->doctorCreateGroup->setVisible(false);
+        ui->employeeTable->setVisible(true);
+        ui->searchBox->setEnabled(true);
+        ui->searchBox->setPlaceholderText("Search your medical records...");
+        resetDoctorCreateForm();
+        return;
+    }
+
     ui->titleLabel->setText("User Dashboard (Coming Soon)");
+    ui->addBtn->setVisible(true);
+    ui->editBtn->setVisible(true);
+    ui->deleteBtn->setVisible(true);
+    ui->editBtn->setText("Edit Profile");
+    ui->deleteBtn->setText("Delete Account");
     ui->addBtn->setEnabled(false);
     ui->editBtn->setEnabled(false);
     ui->deleteBtn->setEnabled(false);
+    ui->viewMyInfoBtn->setVisible(false);
+    ui->viewMyInfoBtn->setEnabled(false);
+    ui->adminTabWidget->setVisible(false);
+    ui->adminTabWidget->setEnabled(false);
+    ui->doctorCreateGroup->setVisible(false);
+    ui->employeeTable->setVisible(true);
     ui->searchBox->setEnabled(false);
     ui->searchBox->setPlaceholderText("This interface will be available soon.");
 }
@@ -164,7 +256,71 @@ void MainWindow::loadAdminUserList() {
         ui->employeeTable->selectRow(0);
         hasLoadedRecord = true;
         selectedRecordId = records.front().recordId;
+        selectedUserId = records.front().userId;
+        selectedUserRole = records.front().role;
+    } else {
+        selectedRecordId = -1;
+        selectedUserId = -1;
+        selectedUserRole = 1;
+        hasLoadedRecord = false;
+        ui->editBtn->setEnabled(false);
+        ui->deleteBtn->setEnabled(false);
     }
+}
+
+void MainWindow::loadAdminMedicalRecordList() {
+    std::string error;
+    std::vector<MedicalRecordListItem> records;
+    if (!networkClient->FetchMedicalRecordList(records, error)) {
+        throw std::runtime_error(error);
+    }
+
+    populateMedicalRecordTable(records);
+}
+
+void MainWindow::loadDoctorMedicalRecordList() {
+    std::string error;
+    std::vector<MedicalRecordListItem> records;
+    if (!networkClient->FetchMyMedicalRecordList(records, error)) {
+        throw std::runtime_error(error);
+    }
+
+    populateMedicalRecordTable(records);
+}
+
+void MainWindow::populateMedicalRecordTable(const std::vector<MedicalRecordListItem>& records) {
+    ui->employeeTable->setRowCount(0);
+    ui->employeeTable->setColumnCount(8);
+    ui->employeeTable->setHorizontalHeaderLabels(QStringList{
+        "Medical ID",
+        "Patient ID",
+        "Patient Name",
+        "Doctor ID",
+        "Visit Date",
+        "Department",
+        "Diagnosis",
+        "Prescription"
+    });
+
+    for (int i = 0; i < static_cast<int>(records.size()); ++i) {
+        const MedicalRecordListItem& record = records[static_cast<size_t>(i)];
+        ui->employeeTable->insertRow(i);
+        ui->employeeTable->setItem(i, 0, new QTableWidgetItem(QString::number(record.recordId)));
+        ui->employeeTable->setItem(i, 1, new QTableWidgetItem(QString::number(record.patientId)));
+        ui->employeeTable->setItem(i, 2, new QTableWidgetItem(QString::fromStdString(record.patientName)));
+        ui->employeeTable->setItem(i, 3, new QTableWidgetItem(QString::number(record.doctorId)));
+        ui->employeeTable->setItem(i, 4, new QTableWidgetItem(QString::fromStdString(record.visitDate)));
+        ui->employeeTable->setItem(i, 5, new QTableWidgetItem(QString::fromStdString(record.department)));
+        ui->employeeTable->setItem(i, 6, new QTableWidgetItem(QString::fromStdString(record.diagnosis)));
+        ui->employeeTable->setItem(i, 7, new QTableWidgetItem(QString::fromStdString(record.prescription)));
+    }
+
+    hasLoadedRecord = false;
+    selectedRecordId = -1;
+    selectedUserId = -1;
+    selectedUserRole = 1;
+    ui->editBtn->setEnabled(false);
+    ui->deleteBtn->setEnabled(false);
 }
 
 void MainWindow::loadNonAdminPlaceholder() {
@@ -175,6 +331,41 @@ void MainWindow::loadNonAdminPlaceholder() {
     ui->employeeTable->setItem(0, 0, new QTableWidgetItem("Non-admin interface is temporarily empty."));
     hasLoadedRecord = false;
     selectedRecordId = -1;
+    selectedUserId = -1;
+    selectedUserRole = 1;
+}
+
+void MainWindow::resetDoctorCreateForm() {
+    ui->patientIdInput->clear();
+    ui->visitDateInput->setDate(QDate::currentDate());
+    ui->departmentInput->clear();
+    ui->diagnosisInput->clear();
+    ui->prescriptionInput->clear();
+}
+
+bool MainWindow::promptPasswordForSensitiveAction(const QString& title,
+                                                  const QString& prompt,
+                                                  QString& passwordOut) const {
+    bool ok = false;
+    const QString password = QInputDialog::getText(
+        const_cast<MainWindow*>(this),
+        title,
+        prompt,
+        QLineEdit::Password,
+        "",
+        &ok);
+
+    if (!ok) {
+        return false;
+    }
+
+    if (password.isEmpty()) {
+        QMessageBox::warning(const_cast<MainWindow*>(this), "Validation Error", "Mat khau khong duoc de trong.");
+        return false;
+    }
+
+    passwordOut = password;
+    return true;
 }
 
 void MainWindow::applyStyles() {
@@ -198,11 +389,31 @@ void MainWindow::loadProfileData() {
     ui->employeeTable->setRowCount(0);
     hasLoadedRecord = false;
     selectedRecordId = -1;
+    selectedUserId = -1;
+    selectedUserRole = 1;
 
     try {
         if (isAdminMode()) {
-            loadAdminUserList();
+            ui->employeeTable->setVisible(true);
+            ui->doctorCreateGroup->setVisible(false);
+            if (isAdminUsersTabActive()) {
+                loadAdminUserList();
+            } else {
+                loadAdminMedicalRecordList();
+            }
+        } else if (isDoctorMode()) {
+            if (isDoctorListTabActive()) {
+                ui->employeeTable->setVisible(true);
+                ui->doctorCreateGroup->setVisible(false);
+                loadDoctorMedicalRecordList();
+            } else {
+                ui->employeeTable->setVisible(false);
+                ui->doctorCreateGroup->setVisible(true);
+                resetDoctorCreateForm();
+            }
         } else {
+            ui->employeeTable->setVisible(true);
+            ui->doctorCreateGroup->setVisible(false);
             loadNonAdminPlaceholder();
         }
 
@@ -214,8 +425,47 @@ void MainWindow::loadProfileData() {
     }
 }
 
+void MainWindow::onAdminTabChanged(int) {
+    if (!isAdminMode() && !isDoctorMode()) {
+        return;
+    }
+
+    if (isAdminMode() && isAdminUsersTabActive()) {
+        ui->searchBox->setPlaceholderText("Search encrypted user list...");
+        ui->searchBox->setEnabled(true);
+        ui->employeeTable->setVisible(true);
+        ui->doctorCreateGroup->setVisible(false);
+    } else if (isAdminMode()) {
+        ui->searchBox->setPlaceholderText("Search medical records...");
+        ui->searchBox->setEnabled(true);
+        ui->employeeTable->setVisible(true);
+        ui->doctorCreateGroup->setVisible(false);
+        ui->editBtn->setEnabled(false);
+        ui->deleteBtn->setEnabled(false);
+    } else if (isDoctorListTabActive()) {
+        ui->searchBox->setPlaceholderText("Search your medical records...");
+        ui->searchBox->setEnabled(true);
+        ui->employeeTable->setVisible(true);
+        ui->doctorCreateGroup->setVisible(false);
+    } else {
+        ui->searchBox->clear();
+        ui->searchBox->setPlaceholderText("Search is disabled in create tab.");
+        ui->searchBox->setEnabled(false);
+        ui->employeeTable->setVisible(false);
+        ui->doctorCreateGroup->setVisible(true);
+        resetDoctorCreateForm();
+    }
+
+    loadProfileData();
+}
+
 void MainWindow::updateStatistics() {
-    if (!isAdminMode()) {
+    if (!isAdminMode() && !isDoctorMode()) {
+        ui->totalValue->setText("N/A");
+        return;
+    }
+
+    if (isDoctorMode()) {
         ui->totalValue->setText("N/A");
         return;
     }
@@ -243,7 +493,70 @@ void MainWindow::onRefreshProfile() {
 
 void MainWindow::onEditProfile() {
     if (isAdminMode()) {
-        QMessageBox::information(this, "Read-only", "Admin view currently supports encrypted user listing only.");
+        if (!isAdminUsersTabActive()) {
+            QMessageBox::information(this, "Chi doc", "Tab benh an hien tai chi ho tro xem danh sach.");
+            return;
+        }
+
+        const int selectedRow = ui->employeeTable->currentRow();
+        const QString selectedUsername =
+            (selectedRow >= 0 && ui->employeeTable->item(selectedRow, 2) != nullptr)
+                ? ui->employeeTable->item(selectedRow, 2)->text()
+                : QString();
+
+        if (selectedUsername.compare(currentUsername, Qt::CaseInsensitive) == 0) {
+            QMessageBox::warning(this, "Khong hop le", "Admin khong duoc tu phan quyen cho chinh minh.");
+            return;
+        }
+
+        if (selectedUserId <= 0) {
+            QMessageBox::warning(this, "Warning", "Vui long chon nguoi dung de phan quyen.");
+            return;
+        }
+
+        const QStringList roleOptions{"User (1)", "Doctor (2)", "Admin (3)"};
+        int currentIndex = 0;
+        if (selectedUserRole == 2) {
+            currentIndex = 1;
+        } else if (selectedUserRole == 3) {
+            currentIndex = 2;
+        }
+
+        bool ok = false;
+        const QString selectedRoleLabel = QInputDialog::getItem(
+            this,
+            "Phan quyen nguoi dung",
+            QString("Chon role moi cho User ID %1:").arg(selectedUserId),
+            roleOptions,
+            currentIndex,
+            false,
+            &ok);
+
+        if (!ok || selectedRoleLabel.isEmpty()) {
+            return;
+        }
+
+        int newRole = 1;
+        if (selectedRoleLabel.contains("(2)")) {
+            newRole = 2;
+        } else if (selectedRoleLabel.contains("(3)")) {
+            newRole = 3;
+        }
+
+        std::string error;
+        if (!networkClient->AdminUpdateUserRole(selectedUserId, newRole, error)) {
+            QMessageBox::critical(this, "Phan quyen that bai", QString::fromStdString(error));
+            return;
+        }
+
+        QMessageBox::information(this, "Thanh cong", "Da cap nhat role nguoi dung.");
+        loadProfileData();
+        updateStatistics();
+        return;
+    }
+
+    if (isDoctorMode()) {
+        QMessageBox::information(this, "Notice", "Doctor interface does not use Edit button.");
         return;
     }
 
@@ -255,6 +568,7 @@ void MainWindow::onEditProfile() {
     EmployeeDialog dialog(EmployeeDialog::EditMode, this);
     EmployeeDialog::RecordData data;
     data.username = QString::fromStdString(currentRecord.username);
+    data.name = QString::fromStdString(currentRecord.name);
     data.gender = currentRecord.gender;
     data.cccd = QString::fromStdString(currentRecord.cccd);
     data.phone = QString::fromStdString(currentRecord.phone);
@@ -266,6 +580,7 @@ void MainWindow::onEditProfile() {
     }
 
     const EmployeeDialog::RecordData updated = dialog.getRecordData();
+
     QString validationError;
     if (!ValidateRecordData(updated, validationError)) {
         QMessageBox::warning(this, "Validation Error", validationError);
@@ -274,6 +589,7 @@ void MainWindow::onEditProfile() {
 
     PersonalRecord record = currentRecord;
     record.username = updated.username.toStdString();
+    record.name = updated.name.toStdString();
     record.gender = updated.gender;
     record.cccd = updated.cccd.toStdString();
     record.phone = updated.phone.toStdString();
@@ -285,13 +601,62 @@ void MainWindow::onEditProfile() {
         return;
     }
 
+    currentUsername = QString::fromStdString(record.username);
     QMessageBox::information(this, "Success", "Profile updated successfully.");
     loadProfileData();
 }
 
 void MainWindow::onDeleteAccount() {
     if (isAdminMode()) {
-        QMessageBox::information(this, "Read-only", "Admin view currently supports encrypted user listing only.");
+        if (!isAdminUsersTabActive()) {
+            QMessageBox::information(this, "Chi doc", "Tab benh an hien tai chi ho tro xem danh sach.");
+            return;
+        }
+
+        const int selectedRow = ui->employeeTable->currentRow();
+        const QString selectedUsername =
+            (selectedRow >= 0 && ui->employeeTable->item(selectedRow, 2) != nullptr)
+                ? ui->employeeTable->item(selectedRow, 2)->text()
+                : QString();
+
+        if (selectedUsername.compare(currentUsername, Qt::CaseInsensitive) == 0) {
+            QMessageBox::warning(this, "Khong hop le", "Admin khong duoc xoa chinh minh o che do quan tri.");
+            return;
+        }
+
+        if (selectedUserId <= 0) {
+            QMessageBox::warning(this, "Warning", "Vui long chon nguoi dung de xoa.");
+            return;
+        }
+
+        const QString targetUsername = ui->employeeTable->item(ui->employeeTable->currentRow(), 2)
+                                           ? ui->employeeTable->item(ui->employeeTable->currentRow(), 2)->text()
+                                           : QString();
+
+        const QMessageBox::StandardButton reply =
+            QMessageBox::question(this,
+                                  "Xoa tai khoan nguoi dung",
+                                  QString("Xoa tai khoan User ID %1 (%2)?").arg(selectedUserId).arg(targetUsername),
+                                  QMessageBox::Yes | QMessageBox::No);
+
+        if (reply != QMessageBox::Yes) {
+            return;
+        }
+
+        std::string error;
+        if (!networkClient->AdminDeleteUser(selectedUserId, error)) {
+            QMessageBox::critical(this, "Xoa that bai", QString::fromStdString(error));
+            return;
+        }
+
+        QMessageBox::information(this, "Thanh cong", "Da xoa tai khoan nguoi dung.");
+        loadProfileData();
+        updateStatistics();
+        return;
+    }
+
+    if (isDoctorMode()) {
+        QMessageBox::information(this, "Notice", "Doctor interface does not use Delete button.");
         return;
     }
 
@@ -320,6 +685,10 @@ void MainWindow::onDeleteAccount() {
 }
 
 void MainWindow::onSearch(const QString& searchText) {
+    if (isDoctorCreateTabActive()) {
+        return;
+    }
+
     for (int i = 0; i < ui->employeeTable->rowCount(); ++i) {
         bool found = false;
         for (int j = 0; j < ui->employeeTable->columnCount(); ++j) {
@@ -331,6 +700,114 @@ void MainWindow::onSearch(const QString& searchText) {
         }
         ui->employeeTable->setRowHidden(i, !found);
     }
+}
+
+void MainWindow::onViewMyInfo() {
+    if (!isAdminMode() && !isDoctorMode()) {
+        return;
+    }
+
+    QString password;
+    if (!promptPasswordForSensitiveAction("Xem thong tin cua toi", "Nhap lai mat khau de xac thuc:", password)) {
+        return;
+    }
+
+    PersonalRecord myInfo;
+    std::string error;
+    if (!networkClient->FetchMyInfoForAdmin(password.toStdString(), myInfo, error)) {
+        QMessageBox::critical(this, "Error", QString::fromStdString(error));
+        return;
+    }
+
+    EmployeeDialog dialog(EmployeeDialog::EditMode, this, false);
+    EmployeeDialog::RecordData data;
+    data.username = QString::fromStdString(myInfo.username);
+    data.name = QString::fromStdString(myInfo.name);
+    data.gender = myInfo.gender;
+    data.cccd = QString::fromStdString(myInfo.cccd);
+    data.phone = QString::fromStdString(myInfo.phone);
+    data.email = QString::fromStdString(myInfo.email);
+    dialog.setRecordData(data);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    const EmployeeDialog::RecordData updated = dialog.getRecordData();
+    const QString effectivePassword = updated.password.isEmpty() ? password : updated.password;
+
+    EmployeeDialog::RecordData validated = updated;
+    validated.password = effectivePassword;
+
+    QString validationError;
+    if (!ValidateRecordData(validated, validationError)) {
+        QMessageBox::warning(this, "Validation Error", validationError);
+        return;
+    }
+
+    PersonalRecord updatedRecord = myInfo;
+    updatedRecord.username = updated.username.toStdString();
+    updatedRecord.name = updated.name.toStdString();
+    updatedRecord.gender = updated.gender;
+    updatedRecord.cccd = updated.cccd.toStdString();
+    updatedRecord.phone = updated.phone.toStdString();
+    updatedRecord.email = updated.email.toStdString();
+
+    const QMessageBox::StandardButton confirm = QMessageBox::question(
+        this,
+        "Xac nhan cap nhat",
+        "Ban co chac chan muon luu thay doi thong tin ca nhan?",
+        QMessageBox::Yes | QMessageBox::No);
+    if (confirm != QMessageBox::Yes) {
+        return;
+    }
+
+    if (!networkClient->UpdateProfile(updatedRecord, effectivePassword.toStdString(), error)) {
+        QMessageBox::critical(this, "Update Failed", QString::fromStdString(error));
+        return;
+    }
+
+    currentUsername = QString::fromStdString(updatedRecord.username);
+    QMessageBox::information(this, "Success", "Profile updated successfully.");
+    loadProfileData();
+}
+
+void MainWindow::onCreateMedicalRecord() {
+    if (!isDoctorMode() || !isDoctorCreateTabActive()) {
+        return;
+    }
+
+    bool patientIdOk = false;
+    const int patientId = ui->patientIdInput->text().trimmed().toInt(&patientIdOk);
+    if (!patientIdOk || patientId <= 0) {
+        QMessageBox::warning(this, "Validation Error", "Patient ID khong hop le.");
+        return;
+    }
+
+    const QString visitDate = ui->visitDateInput->date().toString("yyyy-MM-dd");
+    const QString department = ui->departmentInput->text().trimmed();
+    const QString diagnosis = ui->diagnosisInput->toPlainText().trimmed();
+    const QString prescription = ui->prescriptionInput->toPlainText().trimmed();
+
+    if (diagnosis.isEmpty() || prescription.isEmpty()) {
+        QMessageBox::warning(this, "Validation Error", "Diagnosis va Prescription khong duoc de trong.");
+        return;
+    }
+
+    std::string error;
+    if (!networkClient->CreateMedicalRecord(
+            patientId,
+            visitDate.toStdString(),
+            department.toStdString(),
+            diagnosis.toStdString(),
+            prescription.toStdString(),
+            error)) {
+        QMessageBox::critical(this, "Create Failed", QString::fromStdString(error));
+        return;
+    }
+
+    QMessageBox::information(this, "Success", "Da tao benh an moi.");
+    resetDoctorCreateForm();
 }
 
 void MainWindow::onLogout() {
@@ -351,9 +828,69 @@ void MainWindow::onLogout() {
 void MainWindow::onTableRowSelection() {
     const QList<QTableWidgetItem*> selected = ui->employeeTable->selectedItems();
     if (!selected.isEmpty()) {
-        QTableWidgetItem* idItem = ui->employeeTable->item(selected.first()->row(), 0);
-        if (idItem) {
+        const int selectedRow = selected.first()->row();
+
+        QTableWidgetItem* idItem = ui->employeeTable->item(selectedRow, 0);
+        if (idItem != nullptr) {
             selectedRecordId = idItem->text().toInt();
         }
+
+        if (isAdminMode()) {
+            if (!isAdminUsersTabActive()) {
+                selectedUserId = -1;
+                selectedUserRole = 1;
+                ui->editBtn->setEnabled(false);
+                ui->deleteBtn->setEnabled(false);
+                return;
+            }
+
+            QTableWidgetItem* userIdItem = ui->employeeTable->item(selectedRow, 1);
+            QTableWidgetItem* roleItem = ui->employeeTable->item(selectedRow, 3);
+            QTableWidgetItem* usernameItem = ui->employeeTable->item(selectedRow, 2);
+
+            selectedUserId = userIdItem != nullptr ? userIdItem->text().toInt() : -1;
+            selectedUserRole = roleItem != nullptr ? LabelToRole(roleItem->text()) : 1;
+            const QString selectedUsername = usernameItem != nullptr ? usernameItem->text() : QString();
+
+            const bool hasValidSelection =
+                selectedUserId > 0 && selectedUsername.compare(currentUsername, Qt::CaseInsensitive) != 0;
+            ui->editBtn->setEnabled(hasValidSelection);
+            ui->deleteBtn->setEnabled(hasValidSelection);
+        } else if (isDoctorMode()) {
+            ui->editBtn->setEnabled(false);
+            ui->deleteBtn->setEnabled(false);
+
+            if (isDoctorListTabActive() && selectedRecordId > 0) {
+                QString password;
+                if (!promptPasswordForSensitiveAction("Xem chi tiet benh an", "Nhap mat khau de giai ma benh an:", password)) {
+                    return;
+                }
+
+                MedicalRecordListItem detail;
+                std::string error;
+                if (!networkClient->FetchMedicalRecordDetailForDoctor(selectedRecordId, password.toStdString(), detail, error)) {
+                    QMessageBox::critical(this, "Error", QString::fromStdString(error));
+                    return;
+                }
+
+                const QString detailText =
+                    QString("Medical ID: %1\nPatient ID: %2\nPatient Name: %3\nDoctor ID: %4\nVisit Date: %5\nDepartment: %6\nDiagnosis: %7\nPrescription: %8")
+                        .arg(detail.recordId)
+                        .arg(detail.patientId)
+                        .arg(QString::fromStdString(detail.patientName))
+                        .arg(detail.doctorId)
+                        .arg(QString::fromStdString(detail.visitDate))
+                        .arg(QString::fromStdString(detail.department))
+                        .arg(QString::fromStdString(detail.diagnosis))
+                        .arg(QString::fromStdString(detail.prescription));
+
+                QMessageBox::information(this, "Chi tiet benh an", detailText);
+            }
+        }
+    } else if (isAdminMode()) {
+        selectedUserId = -1;
+        selectedUserRole = 1;
+        ui->editBtn->setEnabled(false);
+        ui->deleteBtn->setEnabled(false);
     }
 }

@@ -8,6 +8,17 @@
 
 struct PacketData;
 
+struct MedicalRecordListItem {
+    int recordId = -1;
+    int patientId = -1;
+    std::string patientName;
+    int doctorId = -1;
+    std::string visitDate;
+    std::string department;
+    std::string diagnosis;
+    std::string prescription;
+};
+
 class NetworkClient {
 public:
     struct LoginResult {
@@ -34,6 +45,21 @@ public:
     bool DeleteAccount(std::string& error);
     bool GetTotalUsers(int& total, std::string& error);
     bool FetchEncryptedUserList(std::vector<PersonalRecord>& records, std::string& error);
+    bool FetchMedicalRecordList(std::vector<MedicalRecordListItem>& records, std::string& error);
+    bool FetchMyMedicalRecordList(std::vector<MedicalRecordListItem>& records, std::string& error);
+    bool CreateMedicalRecord(int patientId,
+                             const std::string& visitDate,
+                             const std::string& department,
+                             const std::string& diagnosis,
+                             const std::string& prescription,
+                             std::string& error);
+    bool FetchMedicalRecordDetailForDoctor(int medicalRecordId,
+                                           const std::string& passwordPlaintext,
+                                           MedicalRecordListItem& record,
+                                           std::string& error);
+    bool FetchMyInfoForAdmin(const std::string& passwordPlaintext, PersonalRecord& record, std::string& error);
+    bool AdminDeleteUser(int userId, std::string& error);
+    bool AdminUpdateUserRole(int userId, int newRole, std::string& error);
 
 private:
     bool SendAll(const char* data, int totalBytes);

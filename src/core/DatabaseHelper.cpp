@@ -25,7 +25,8 @@ using namespace std;
 namespace {
 
 constexpr int kRoleUser = 1;
-constexpr int kRoleAdmin = 2;
+constexpr int kRoleDoctor = 2;
+constexpr int kRoleAdmin = 3;
 
 void RollbackQuietly(sql::Connection* conn) {
     if (conn == nullptr) {
@@ -57,7 +58,7 @@ bool LooksLikeEmail(const string& value) {
 }
 
 bool IsValidRoleValue(int role) {
-    return role == kRoleUser || role == kRoleAdmin;
+    return role == kRoleUser || role == kRoleAdmin || role == kRoleDoctor;
 }
 
 bool IsHexCipherText(const string& value) {
@@ -80,8 +81,25 @@ string DecodeCipherForBlowfish(const string& storedValue) {
         return decoded;
     }
 
-    // Backward compatibility: keep supporting legacy hex ciphertext already in DB.
     return storedValue;
+}
+
+string DecryptMedicalFieldWithDoctorKek(const string& storedValue, const string& doctorKek) {
+    if (storedValue.empty() || doctorKek.empty()) {
+        return storedValue;
+    }
+
+    try {
+        const string cipherHex = DecodeCipherForBlowfish(storedValue);
+        if (!IsHexCipherText(cipherHex)) {
+            return storedValue;
+        }
+
+        Blowfish cipher(doctorKek);
+        return cipher.DecryptString(cipherHex);
+    } catch (...) {
+        return storedValue;
+    }
 }
 
 }  // namespace
@@ -211,6 +229,7 @@ bool DatabaseHelper::InitializeSchema() {
         "CREATE TABLE IF NOT EXISTS users ("
         "id INT AUTO_INCREMENT PRIMARY KEY, "
         "username VARCHAR(255) NOT NULL UNIQUE, "
+        "name VARCHAR(255) NULL, "
         "password_hash VARCHAR(255) NOT NULL, "
         "role TINYINT NOT NULL DEFAULT 1, "
         "INDEX idx_users_username (username)"
@@ -231,6 +250,26 @@ bool DatabaseHelper::InitializeSchema() {
         "REFERENCES users(id) ON DELETE CASCADE"
         ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;";
 
+    const string createMedicalRecordsTable =
+        "CREATE TABLE IF NOT EXISTS medical_records ("
+        "id INT AUTO_INCREMENT PRIMARY KEY, "
+        "patient_id INT NOT NULL, "
+        "doctor_id INT NOT NULL, "
+        "visit_date DATE NOT NULL, "
+        "department VARCHAR(100) NULL, "
+        "patient_encrypted_dek VARCHAR(255) NOT NULL, "
+        "doctor_encrypted_dek VARCHAR(255) NOT NULL, "
+        "diagnosis_cipher TEXT NOT NULL, "
+        "prescription_cipher TEXT NOT NULL, "
+        "INDEX idx_medical_records_patient_id (patient_id), "
+        "INDEX idx_medical_records_doctor_id (doctor_id), "
+        "INDEX idx_medical_records_visit_date (visit_date), "
+        "CONSTRAINT fk_medical_records_patient FOREIGN KEY (patient_id) "
+        "REFERENCES users(id) ON DELETE CASCADE, "
+        "CONSTRAINT fk_medical_records_doctor FOREIGN KEY (doctor_id) "
+        "REFERENCES users(id) ON DELETE CASCADE"
+        ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;";
+
     const string migrateCipherColumns =
         "ALTER TABLE personal_records "
         "MODIFY COLUMN CCCD_cipher TEXT NOT NULL, "
@@ -241,17 +280,23 @@ bool DatabaseHelper::InitializeSchema() {
         "ALTER TABLE users "
         "ADD COLUMN IF NOT EXISTS role TINYINT NOT NULL DEFAULT 1;";
 
+    const string addNameColumnIfMissing =
+        "ALTER TABLE users "
+        "ADD COLUMN IF NOT EXISTS name VARCHAR(255) NULL AFTER username;";
+
     const string normalizeRoleColumn =
         "ALTER TABLE users "
         "MODIFY COLUMN role TINYINT NOT NULL DEFAULT 1;";
 
     const string fixInvalidRoleValues =
-        "UPDATE users SET role = 1 WHERE role NOT IN (1, 2);";
+        "UPDATE users SET role = 1 WHERE role NOT IN (1, 2, 3);";
 
     if (!ExecuteQuery(createUsersTable) ||
         !ExecuteQuery(createPersonalRecordsTable) ||
+        !ExecuteQuery(createMedicalRecordsTable) ||
         !ExecuteQuery(migrateCipherColumns) ||
         !ExecuteQuery(addRoleColumnIfMissing) ||
+        !ExecuteQuery(addNameColumnIfMissing) ||
         !ExecuteQuery(normalizeRoleColumn) ||
         !ExecuteQuery(fixInvalidRoleValues)) {
         return false;
@@ -281,6 +326,7 @@ bool DatabaseHelper::BootstrapDefaultUser() {
         cout << "[DATABASE] No users found. Bootstrapping default account 'admin'." << endl;
         return RegisterUser(
             "admin",
+            "System Administrator",
             "admin12345",
             1,
             "012345678912",
@@ -294,6 +340,7 @@ bool DatabaseHelper::BootstrapDefaultUser() {
 }
 
 bool DatabaseHelper::RegisterUser(const string& username,
+                                  const string& name,
                                   const string& passwordPlaintext,
                                   int gender,
                                   const string& cccdPlaintext,
@@ -310,6 +357,11 @@ bool DatabaseHelper::RegisterUser(const string& username,
         return false;
     }
 
+    if (name.empty()) {
+        cerr << "[ERROR] Name must not be empty" << endl;
+        return false;
+    }
+
     if (passwordPlaintext.size() < 8) {
         cerr << "[ERROR] Password must be at least 8 characters" << endl;
         return false;
@@ -321,7 +373,7 @@ bool DatabaseHelper::RegisterUser(const string& username,
     }
 
     if (!IsValidRoleValue(role)) {
-        cerr << "[ERROR] Role must be 1 (user) or 2 (admin)" << endl;
+        cerr << "[ERROR] Role must be 1 (user), 2 (doctor), or 3 (admin)" << endl;
         return false;
     }
 
@@ -357,10 +409,11 @@ bool DatabaseHelper::RegisterUser(const string& username,
         conn->setAutoCommit(false);
 
         unique_ptr<sql::PreparedStatement> insertUser(conn->prepareStatement(
-            "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)"));
+            "INSERT INTO users (username, name, password_hash, role) VALUES (?, ?, ?, ?)"));
         insertUser->setString(1, username);
-        insertUser->setString(2, passwordHash);
-        insertUser->setInt(3, role);
+        insertUser->setString(2, name);
+        insertUser->setString(3, passwordHash);
+        insertUser->setInt(4, role);
         insertUser->execute();
 
         unique_ptr<sql::Statement> identityStmt(conn->createStatement());
@@ -408,7 +461,7 @@ bool DatabaseHelper::GetPersonalRecordForUser(int userId,
     try {
         sql::Connection* conn = static_cast<sql::Connection*>(connection);
         unique_ptr<sql::PreparedStatement> pstmt(conn->prepareStatement(
-            "SELECT u.id AS user_id, u.username, u.role, pr.id AS record_id, pr.Gender, "
+            "SELECT u.id AS user_id, u.username, COALESCE(u.name, '') AS name, u.role, pr.id AS record_id, pr.Gender, "
             "pr.encrypted_dek, pr.CCCD_cipher, pr.SDT_cipher, pr.Email_cipher "
             "FROM users u "
             "INNER JOIN personal_records pr ON pr.user_id = u.id "
@@ -426,6 +479,7 @@ bool DatabaseHelper::GetPersonalRecordForUser(int userId,
         record.userId = res->getInt("user_id");
         record.recordId = res->getInt("record_id");
         record.username = res->getString("username");
+        record.name = res->getString("name");
         record.role = res->getInt("role");
         record.gender = res->getInt("Gender");
         record.encryptedDek = encryptedDek;
@@ -448,6 +502,7 @@ bool DatabaseHelper::GetPersonalRecordForUser(int userId,
 bool DatabaseHelper::UpdatePersonalRecordForUser(int userId,
                                                  const string& currentSessionKek,
                                                  const string& newUsername,
+                                                 const string& newName,
                                                  const string& newPasswordPlaintext,
                                                  bool updatePassword,
                                                  int newGender,
@@ -464,6 +519,11 @@ bool DatabaseHelper::UpdatePersonalRecordForUser(int userId,
 
     if (newUsername.empty()) {
         cerr << "[ERROR] Username must not be empty" << endl;
+        return false;
+    }
+
+    if (newName.empty()) {
+        cerr << "[ERROR] Name must not be empty" << endl;
         return false;
     }
 
@@ -537,16 +597,18 @@ bool DatabaseHelper::UpdatePersonalRecordForUser(int userId,
 
         if (updatePassword) {
             unique_ptr<sql::PreparedStatement> updateUser(conn->prepareStatement(
-                "UPDATE users SET username = ?, password_hash = ? WHERE id = ?"));
+                "UPDATE users SET username = ?, name = ?, password_hash = ? WHERE id = ?"));
             updateUser->setString(1, newUsername);
-            updateUser->setString(2, newPasswordHash);
-            updateUser->setInt(3, userId);
+            updateUser->setString(2, newName);
+            updateUser->setString(3, newPasswordHash);
+            updateUser->setInt(4, userId);
             updateUser->execute();
         } else {
             unique_ptr<sql::PreparedStatement> updateUser(conn->prepareStatement(
-                "UPDATE users SET username = ? WHERE id = ?"));
+                "UPDATE users SET username = ?, name = ? WHERE id = ?"));
             updateUser->setString(1, newUsername);
-            updateUser->setInt(2, userId);
+            updateUser->setString(2, newName);
+            updateUser->setInt(3, userId);
             updateUser->execute();
         }
 
@@ -587,10 +649,157 @@ bool DatabaseHelper::DeleteUserById(int userId) {
         unique_ptr<sql::PreparedStatement> pstmt(conn->prepareStatement(
             "DELETE FROM users WHERE id = ?"));
         pstmt->setInt(1, userId);
-        pstmt->execute();
-        return true;
+        const int affectedRows = pstmt->executeUpdate();
+        return affectedRows > 0;
     } catch (const exception& e) {
         cerr << "[ERROR] DeleteUserById failed: " << e.what() << endl;
+        return false;
+    }
+}
+
+bool DatabaseHelper::UserExistsById(int userId) {
+    if (!IsConnected()) {
+        cerr << "[ERROR] Database is not connected" << endl;
+        return false;
+    }
+
+    if (userId <= 0) {
+        return false;
+    }
+
+    try {
+        sql::Connection* conn = static_cast<sql::Connection*>(connection);
+        unique_ptr<sql::PreparedStatement> pstmt(conn->prepareStatement(
+            "SELECT 1 FROM users WHERE id = ? LIMIT 1"));
+        pstmt->setInt(1, userId);
+        unique_ptr<sql::ResultSet> res(pstmt->executeQuery());
+        return res->next();
+    } catch (const exception& e) {
+        cerr << "[ERROR] UserExistsById failed: " << e.what() << endl;
+        return false;
+    }
+}
+
+bool DatabaseHelper::UpdateUserRoleById(int userId, int newRole) {
+    if (!IsConnected()) {
+        cerr << "[ERROR] Database is not connected" << endl;
+        return false;
+    }
+
+    if (userId <= 0) {
+        cerr << "[ERROR] User id must be positive" << endl;
+        return false;
+    }
+
+    if (!IsValidRoleValue(newRole)) {
+        cerr << "[ERROR] Role must be 1 (user), 2 (doctor), or 3 (admin)" << endl;
+        return false;
+    }
+
+    try {
+        sql::Connection* conn = static_cast<sql::Connection*>(connection);
+        unique_ptr<sql::PreparedStatement> pstmt(conn->prepareStatement(
+            "UPDATE users SET role = ? WHERE id = ?"));
+        pstmt->setInt(1, newRole);
+        pstmt->setInt(2, userId);
+        const int affectedRows = pstmt->executeUpdate();
+        return affectedRows > 0;
+    } catch (const exception& e) {
+        cerr << "[ERROR] UpdateUserRoleById failed: " << e.what() << endl;
+        return false;
+    }
+}
+
+bool DatabaseHelper::CreateMedicalRecord(int patientId,
+                                         int doctorId,
+                                         const string& visitDate,
+                                         const string& department,
+                                         const string& diagnosisPlaintext,
+                                         const string& prescriptionPlaintext,
+                                         const string& doctorKek) {
+    if (!IsConnected()) {
+        cerr << "[ERROR] Database is not connected" << endl;
+        return false;
+    }
+
+    if (patientId <= 0 || doctorId <= 0) {
+        cerr << "[ERROR] Patient id and doctor id must be positive" << endl;
+        return false;
+    }
+
+    if (visitDate.empty()) {
+        cerr << "[ERROR] Visit date is required" << endl;
+        return false;
+    }
+
+    if (diagnosisPlaintext.empty() || prescriptionPlaintext.empty()) {
+        cerr << "[ERROR] Diagnosis and prescription are required" << endl;
+        return false;
+    }
+
+    if (doctorKek.empty()) {
+        cerr << "[ERROR] Doctor KEK is required" << endl;
+        return false;
+    }
+
+    try {
+        sql::Connection* conn = static_cast<sql::Connection*>(connection);
+
+        unique_ptr<sql::PreparedStatement> patientStmt(conn->prepareStatement(
+            "SELECT role FROM users WHERE id = ?"));
+        patientStmt->setInt(1, patientId);
+        unique_ptr<sql::ResultSet> patientRes(patientStmt->executeQuery());
+        if (!patientRes->next()) {
+            cerr << "[ERROR] Patient account does not exist" << endl;
+            return false;
+        }
+
+        const int patientRole = patientRes->getInt("role");
+        if (patientRole != kRoleUser) {
+            cerr << "[ERROR] Target patient must have user role" << endl;
+            return false;
+        }
+
+        unique_ptr<sql::PreparedStatement> doctorStmt(conn->prepareStatement(
+            "SELECT role FROM users WHERE id = ?"));
+        doctorStmt->setInt(1, doctorId);
+        unique_ptr<sql::ResultSet> doctorRes(doctorStmt->executeQuery());
+        if (!doctorRes->next()) {
+            cerr << "[ERROR] Doctor account does not exist" << endl;
+            return false;
+        }
+
+        const int doctorRole = doctorRes->getInt("role");
+        if (doctorRole != kRoleDoctor) {
+            cerr << "[ERROR] Creator must have doctor role" << endl;
+            return false;
+        }
+
+        const string medicalDek = GenerateRandomDek();
+        const string doctorEncryptedDek = WrapDek(medicalDek, doctorKek);
+        // Patient-side unwrap flow is not wired yet, keep a wrapped DEK payload instead of placeholder.
+        const string patientEncryptedDek = doctorEncryptedDek;
+
+        Blowfish cipher(medicalDek);
+        const string diagnosisCipher = Base64::Encode(cipher.EncryptString(diagnosisPlaintext));
+        const string prescriptionCipher = Base64::Encode(cipher.EncryptString(prescriptionPlaintext));
+
+        unique_ptr<sql::PreparedStatement> insertStmt(conn->prepareStatement(
+            "INSERT INTO medical_records "
+            "(patient_id, doctor_id, visit_date, department, patient_encrypted_dek, doctor_encrypted_dek, diagnosis_cipher, prescription_cipher) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"));
+        insertStmt->setInt(1, patientId);
+        insertStmt->setInt(2, doctorId);
+        insertStmt->setString(3, visitDate);
+        insertStmt->setString(4, department);
+        insertStmt->setString(5, patientEncryptedDek);
+        insertStmt->setString(6, doctorEncryptedDek);
+        insertStmt->setString(7, diagnosisCipher);
+        insertStmt->setString(8, prescriptionCipher);
+        const int affectedRows = insertStmt->executeUpdate();
+        return affectedRows > 0;
+    } catch (const exception& e) {
+        cerr << "[ERROR] CreateMedicalRecord failed: " << e.what() << endl;
         return false;
     }
 }
@@ -609,6 +818,50 @@ int DatabaseHelper::GetTotalUsers() {
         }
     } catch (const exception& e) {
         cerr << "[ERROR] GetTotalUsers failed: " << e.what() << endl;
+    }
+
+    return 0;
+}
+
+int DatabaseHelper::GetTotalMedicalRecords() {
+    if (!IsConnected()) {
+        return 0;
+    }
+
+    try {
+        sql::Connection* conn = static_cast<sql::Connection*>(connection);
+        unique_ptr<sql::Statement> stmt(conn->createStatement());
+        unique_ptr<sql::ResultSet> res(stmt->executeQuery("SELECT COUNT(*) AS total FROM medical_records"));
+        if (res->next()) {
+            return res->getInt("total");
+        }
+    } catch (const exception& e) {
+        cerr << "[ERROR] GetTotalMedicalRecords failed: " << e.what() << endl;
+    }
+
+    return 0;
+}
+
+int DatabaseHelper::GetTotalMedicalRecordsForDoctor(int doctorId) {
+    if (!IsConnected()) {
+        return 0;
+    }
+
+    if (doctorId <= 0) {
+        return 0;
+    }
+
+    try {
+        sql::Connection* conn = static_cast<sql::Connection*>(connection);
+        unique_ptr<sql::PreparedStatement> stmt(conn->prepareStatement(
+            "SELECT COUNT(*) AS total FROM medical_records WHERE doctor_id = ?"));
+        stmt->setInt(1, doctorId);
+        unique_ptr<sql::ResultSet> res(stmt->executeQuery());
+        if (res->next()) {
+            return res->getInt("total");
+        }
+    } catch (const exception& e) {
+        cerr << "[ERROR] GetTotalMedicalRecordsForDoctor failed: " << e.what() << endl;
     }
 
     return 0;
@@ -654,6 +907,148 @@ bool DatabaseHelper::GetEncryptedUserRecordByOffset(int offset, PersonalRecord& 
         return true;
     } catch (const exception& e) {
         cerr << "[ERROR] GetEncryptedUserRecordByOffset failed: " << e.what() << endl;
+        return false;
+    }
+}
+
+bool DatabaseHelper::GetMedicalRecordSummaryByOffset(int offset, MedicalRecordSummary& record) {
+    record = MedicalRecordSummary{};
+
+    if (!IsConnected()) {
+        cerr << "[ERROR] Database is not connected" << endl;
+        return false;
+    }
+
+    if (offset < 0) {
+        return false;
+    }
+
+    try {
+        sql::Connection* conn = static_cast<sql::Connection*>(connection);
+        unique_ptr<sql::PreparedStatement> pstmt(conn->prepareStatement(
+            "SELECT mr.id, mr.patient_id, mr.doctor_id, DATE_FORMAT(mr.visit_date, '%Y-%m-%d') AS visit_date, "
+            "COALESCE(mr.department, '') AS department, "
+            "COALESCE(NULLIF(u.name, ''), u.username) AS patient_name, "
+            "mr.diagnosis_cipher, mr.prescription_cipher "
+            "FROM medical_records mr "
+            "INNER JOIN users u ON u.id = mr.patient_id "
+            "ORDER BY mr.id ASC "
+            "LIMIT 1 OFFSET ?"));
+        pstmt->setInt(1, offset);
+        unique_ptr<sql::ResultSet> res(pstmt->executeQuery());
+
+        if (!res->next()) {
+            return false;
+        }
+
+        record.recordId = res->getInt("id");
+        record.patientId = res->getInt("patient_id");
+        record.patientName = res->getString("patient_name");
+        record.doctorId = res->getInt("doctor_id");
+        record.visitDate = res->getString("visit_date");
+        record.department = res->getString("department");
+        record.diagnosisCipher = res->getString("diagnosis_cipher");
+        record.prescriptionCipher = res->getString("prescription_cipher");
+        return true;
+    } catch (const exception& e) {
+        cerr << "[ERROR] GetMedicalRecordSummaryByOffset failed: " << e.what() << endl;
+        return false;
+    }
+}
+
+bool DatabaseHelper::GetMedicalRecordSummaryByDoctorOffset(int doctorId, int offset, MedicalRecordSummary& record) {
+    record = MedicalRecordSummary{};
+
+    if (!IsConnected()) {
+        cerr << "[ERROR] Database is not connected" << endl;
+        return false;
+    }
+
+    if (doctorId <= 0 || offset < 0) {
+        return false;
+    }
+
+    try {
+        sql::Connection* conn = static_cast<sql::Connection*>(connection);
+        unique_ptr<sql::PreparedStatement> pstmt(conn->prepareStatement(
+            "SELECT mr.id, mr.patient_id, mr.doctor_id, DATE_FORMAT(mr.visit_date, '%Y-%m-%d') AS visit_date, "
+            "COALESCE(mr.department, '') AS department, "
+            "COALESCE(NULLIF(u.name, ''), u.username) AS patient_name, "
+            "mr.diagnosis_cipher, mr.prescription_cipher "
+            "FROM medical_records mr "
+            "INNER JOIN users u ON u.id = mr.patient_id "
+            "WHERE mr.doctor_id = ? "
+            "ORDER BY mr.id ASC "
+            "LIMIT 1 OFFSET ?"));
+        pstmt->setInt(1, doctorId);
+        pstmt->setInt(2, offset);
+        unique_ptr<sql::ResultSet> res(pstmt->executeQuery());
+
+        if (!res->next()) {
+            return false;
+        }
+
+        record.recordId = res->getInt("id");
+        record.patientId = res->getInt("patient_id");
+        record.patientName = res->getString("patient_name");
+        record.doctorId = res->getInt("doctor_id");
+        record.visitDate = res->getString("visit_date");
+        record.department = res->getString("department");
+        record.diagnosisCipher = res->getString("diagnosis_cipher");
+        record.prescriptionCipher = res->getString("prescription_cipher");
+        return true;
+    } catch (const exception& e) {
+        cerr << "[ERROR] GetMedicalRecordSummaryByDoctorOffset failed: " << e.what() << endl;
+        return false;
+    }
+}
+
+bool DatabaseHelper::GetMedicalRecordDetailForDoctor(int doctorId,
+                                                     int recordId,
+                                                     const string& doctorKek,
+                                                     MedicalRecordSummary& record) {
+    record = MedicalRecordSummary{};
+
+    if (!IsConnected()) {
+        cerr << "[ERROR] Database is not connected" << endl;
+        return false;
+    }
+
+    if (doctorId <= 0 || recordId <= 0 || doctorKek.empty()) {
+        return false;
+    }
+
+    try {
+        sql::Connection* conn = static_cast<sql::Connection*>(connection);
+        unique_ptr<sql::PreparedStatement> pstmt(conn->prepareStatement(
+            "SELECT mr.id, mr.patient_id, mr.doctor_id, DATE_FORMAT(mr.visit_date, '%Y-%m-%d') AS visit_date, "
+            "COALESCE(mr.department, '') AS department, "
+            "COALESCE(NULLIF(u.name, ''), u.username) AS patient_name, "
+            "mr.doctor_encrypted_dek, mr.diagnosis_cipher, mr.prescription_cipher "
+            "FROM medical_records mr "
+            "INNER JOIN users u ON u.id = mr.patient_id "
+            "WHERE mr.id = ? AND mr.doctor_id = ?"));
+        pstmt->setInt(1, recordId);
+        pstmt->setInt(2, doctorId);
+        unique_ptr<sql::ResultSet> res(pstmt->executeQuery());
+
+        if (!res->next()) {
+            return false;
+        }
+
+        const string medicalDek = UnwrapDek(res->getString("doctor_encrypted_dek"), doctorKek);
+
+        record.recordId = res->getInt("id");
+        record.patientId = res->getInt("patient_id");
+        record.patientName = res->getString("patient_name");
+        record.doctorId = res->getInt("doctor_id");
+        record.visitDate = res->getString("visit_date");
+        record.department = res->getString("department");
+        record.diagnosisCipher = DecryptMedicalFieldWithDoctorKek(res->getString("diagnosis_cipher"), medicalDek);
+        record.prescriptionCipher = DecryptMedicalFieldWithDoctorKek(res->getString("prescription_cipher"), medicalDek);
+        return true;
+    } catch (const exception& e) {
+        cerr << "[ERROR] GetMedicalRecordDetailForDoctor failed: " << e.what() << endl;
         return false;
     }
 }

@@ -18,6 +18,7 @@ struct PacketData {
     int recordCount;
 
     char username[64];
+    char name[128];
     char password[128];
     char cccd[64];
     char phone[64];
@@ -33,6 +34,7 @@ static_assert(sizeof(PacketData) <= 1024, "PacketData size exceeds expected limi
 inline size_t GetLoginCipherCapacity() {
     PacketData packet{};
     return sizeof(packet.username) +
+            sizeof(packet.name) +
            sizeof(packet.password) +
            sizeof(packet.cccd) +
            sizeof(packet.phone) +
@@ -43,6 +45,7 @@ inline size_t GetLoginCipherCapacity() {
 
 inline void ClearLoginCipherFields(PacketData& packet) {
     memset(packet.username, 0, sizeof(packet.username));
+    memset(packet.name, 0, sizeof(packet.name));
     memset(packet.password, 0, sizeof(packet.password));
     memset(packet.cccd, 0, sizeof(packet.cccd));
     memset(packet.phone, 0, sizeof(packet.phone));
@@ -72,6 +75,7 @@ inline bool WriteLoginCiphertext(PacketData& packet, const std::string& cipherTe
 
     size_t offset = 0;
     CopyLoginCipherChunk(packet.username, sizeof(packet.username), cipherText, offset);
+    CopyLoginCipherChunk(packet.name, sizeof(packet.name), cipherText, offset);
     CopyLoginCipherChunk(packet.password, sizeof(packet.password), cipherText, offset);
     CopyLoginCipherChunk(packet.cccd, sizeof(packet.cccd), cipherText, offset);
     CopyLoginCipherChunk(packet.phone, sizeof(packet.phone), cipherText, offset);
@@ -89,6 +93,7 @@ inline std::string ReadLoginCiphertext(const PacketData& packet) {
     std::string cipherText;
     cipherText.reserve(GetLoginCipherCapacity());
     AppendLoginCipherChunk(cipherText, packet.username, sizeof(packet.username));
+    AppendLoginCipherChunk(cipherText, packet.name, sizeof(packet.name));
     AppendLoginCipherChunk(cipherText, packet.password, sizeof(packet.password));
     AppendLoginCipherChunk(cipherText, packet.cccd, sizeof(packet.cccd));
     AppendLoginCipherChunk(cipherText, packet.phone, sizeof(packet.phone));
@@ -108,6 +113,13 @@ inline std::string ReadLoginCiphertext(const PacketData& packet) {
 #define REQ_GET_TOTAL        6
 #define REQ_LOGOUT           7
 #define REQ_ADMIN_LIST_USERS 8
+#define REQ_ADMIN_VIEW_MY_INFO 9
+#define REQ_ADMIN_DELETE_USER 10
+#define REQ_ADMIN_UPDATE_USER_ROLE 11
+#define REQ_ADMIN_LIST_MEDICAL_RECORDS 12
+#define REQ_DOCTOR_LIST_MY_MEDICAL_RECORDS 13
+#define REQ_DOCTOR_CREATE_MEDICAL_RECORD 14
+#define REQ_DOCTOR_VIEW_MEDICAL_RECORD_DETAIL 15
 
 #define DATATYPE_PLAINTEXT       1
 #define DATATYPE_LOGIN_BLOWFISH  2

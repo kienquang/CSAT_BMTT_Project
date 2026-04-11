@@ -2,6 +2,7 @@
 #include <iomanip>
 #include <sstream>
 #include <algorithm>
+#include <stdexcept>
 
 using namespace std;
 
@@ -175,12 +176,16 @@ void Blowfish::InitializeDefaultArrays() {
 Blowfish::Blowfish(const string& key) {
     InitializeDefaultArrays();
 
-    int keyLen = key.length();
+    const size_t keyLen = key.length();
+    if (keyLen == 0) {
+        throw invalid_argument("Blowfish key must not be empty");
+    }
+
     int j = 0;
     for (int i = 0; i < 18; i++) {
         uint32_t data = 0;
         for (int k = 0; k < 4; k++) {
-            data = (data << 8) | key[j];
+            data = (data << 8) | static_cast<uint8_t>(key[j]);
             j = (j + 1) % keyLen;
         }
         P[i] ^= data;
@@ -235,13 +240,24 @@ string Blowfish::EncryptString(const string& text) {
     stringstream hexStream;
 
     for (size_t i = 0; i < paddedText.length(); i += 8) {
-        uint32_t L = (paddedText[i] << 24) | (paddedText[i + 1] << 16) | (paddedText[i + 2] << 8) | paddedText[i + 3];
-        uint32_t R = (paddedText[i + 4] << 24) | (paddedText[i + 5] << 16) | (paddedText[i + 6] << 8) | paddedText[i + 7];
+        const uint32_t L =
+            (static_cast<uint32_t>(static_cast<uint8_t>(paddedText[i])) << 24) |
+            (static_cast<uint32_t>(static_cast<uint8_t>(paddedText[i + 1])) << 16) |
+            (static_cast<uint32_t>(static_cast<uint8_t>(paddedText[i + 2])) << 8) |
+            static_cast<uint32_t>(static_cast<uint8_t>(paddedText[i + 3]));
+        const uint32_t R =
+            (static_cast<uint32_t>(static_cast<uint8_t>(paddedText[i + 4])) << 24) |
+            (static_cast<uint32_t>(static_cast<uint8_t>(paddedText[i + 5])) << 16) |
+            (static_cast<uint32_t>(static_cast<uint8_t>(paddedText[i + 6])) << 8) |
+            static_cast<uint32_t>(static_cast<uint8_t>(paddedText[i + 7]));
 
-        EncryptBlock(L, R);
+        uint32_t encryptedL = L;
+        uint32_t encryptedR = R;
 
-        hexStream << setfill('0') << setw(8) << hex << L;
-        hexStream << setfill('0') << setw(8) << hex << R;
+        EncryptBlock(encryptedL, encryptedR);
+
+        hexStream << setfill('0') << setw(8) << hex << encryptedL;
+        hexStream << setfill('0') << setw(8) << hex << encryptedR;
     }
 
     return hexStream.str();

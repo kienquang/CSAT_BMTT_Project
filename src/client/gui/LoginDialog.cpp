@@ -30,6 +30,11 @@ bool ValidateRecordData(const EmployeeDialog::RecordData& data, QString& error) 
         return false;
     }
 
+    if (data.name.isEmpty()) {
+        error = "Full name cannot be empty.";
+        return false;
+    }
+
     if (data.password.length() < 8) {
         error = "Password must be at least 8 characters.";
         return false;
@@ -185,6 +190,7 @@ void LoginDialog::onRegisterClicked() {
 
     PersonalRecord record;
     record.username = data.username.toStdString();
+    record.name = data.name.toStdString();
     record.gender = data.gender;
     record.cccd = data.cccd.toStdString();
     record.phone = data.phone.toStdString();

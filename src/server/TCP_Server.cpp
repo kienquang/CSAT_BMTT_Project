@@ -4,6 +4,7 @@
 
 #include <cstring>
 #include <string>
+#include <algorithm>
 
 #include "../core/Blowfish.h"
 #include "../core/DatabaseHelper.h"
@@ -24,6 +25,14 @@ void CopyToBuffer(char (&dest)[N], const string& value) {
     memset(dest, 0, N);
     if (!value.empty()) {
         strncpy_s(dest, N, value.c_str(), _TRUNCATE);
+    }
+}
+
+void SecureWipeString(string& value) {
+    if (!value.empty()) {
+        std::fill(value.begin(), value.end(), '\0');
+        value.clear();
+        value.shrink_to_fit();
     }
 }
 
@@ -93,6 +102,7 @@ PersonalRecord PacketToRecord(const PacketData& request) {
     record.userId = request.userId;
     record.recordId = request.recordId;
     record.username = request.username;
+    record.name = request.name;
     record.role = request.role;
     record.gender = request.gender;
     record.cccd = request.cccd;
@@ -108,10 +118,22 @@ void RecordToPacket(const PersonalRecord& record, PacketData& response) {
     response.role = record.role;
     response.gender = record.gender;
     CopyToBuffer(response.username, record.username);
+    CopyToBuffer(response.name, record.name);
     CopyToBuffer(response.cccd, record.cccd);
     CopyToBuffer(response.phone, record.phone);
     CopyToBuffer(response.email, record.email);
     CopyToBuffer(response.encryptedDek, record.encryptedDek);
+}
+
+void MedicalSummaryToPacket(const MedicalRecordSummary& record, PacketData& response) {
+    response.recordId = record.recordId;
+    response.userId = record.patientId;
+    response.role = record.doctorId;
+    CopyToBuffer(response.username, record.visitDate);
+    CopyToBuffer(response.name, record.patientName);
+    CopyToBuffer(response.cccd, record.department);
+    CopyToBuffer(response.phone, record.diagnosisCipher);
+    CopyToBuffer(response.email, record.prescriptionCipher);
 }
 
 PacketData BuildProtocolErrorResponse(const PacketData& request, const string& message) {
@@ -209,6 +231,7 @@ PacketData HandleRegister(DatabaseHelper& dbHelper, const PacketData& request, b
     const PersonalRecord record = PacketToRecord(request);
     const bool created = dbHelper.RegisterUser(
         record.username,
+        record.name,
         request.password,
         record.gender,
         record.cccd,
@@ -237,6 +260,7 @@ PacketData HandleUpdateProfile(DatabaseHelper& dbHelper, const PacketData& reque
         sessionUserId,
         sessionKek,
         record.username,
+        record.name,
         request.password,
         request.password[0] != '\0',
         record.gender,
@@ -253,6 +277,7 @@ PacketData HandleUpdateProfile(DatabaseHelper& dbHelper, const PacketData& reque
         }
         response.userId = sessionUserId;
         CopyToBuffer(response.username, sessionUsername);
+        CopyToBuffer(response.name, record.name);
         CopyToBuffer(response.message, "Profile updated successfully.");
     } else {
         CopyToBuffer(response.message, "Profile update failed.");
@@ -310,7 +335,7 @@ PacketData HandleAdminListUsers(DatabaseHelper& dbHelper,
         return BuildUnauthorizedResponse(REQ_ADMIN_LIST_USERS, "Please login first.");
     }
 
-    if (sessionRole != 2) {
+    if (sessionRole != 3) {
         return BuildUnauthorizedResponse(REQ_ADMIN_LIST_USERS, "Admin role is required.");
     }
 
@@ -335,6 +360,316 @@ PacketData HandleAdminListUsers(DatabaseHelper& dbHelper,
     response.dataType = DATATYPE_PLAINTEXT;
     RecordToPacket(record, response);
     CopyToBuffer(response.message, "Sensitive fields were masked.");
+    return response;
+}
+
+PacketData HandleAdminViewMyInfo(DatabaseHelper& dbHelper,
+                                 bool isAuthenticated,
+                                 int sessionRole,
+                                 int sessionUserId,
+                                 const string& sessionUsername,
+                                 const PacketData& request) {
+    PacketData response;
+    InitializePacket(response);
+    response.requestType = REQ_ADMIN_VIEW_MY_INFO;
+
+    if (!isAuthenticated) {
+        return BuildUnauthorizedResponse(REQ_ADMIN_VIEW_MY_INFO, "Please login first.");
+    }
+
+    if (sessionRole != 2 && sessionRole != 3) {
+        return BuildUnauthorizedResponse(REQ_ADMIN_VIEW_MY_INFO, "Admin or doctor role is required.");
+    }
+
+    string password = request.password;
+    if (password.empty()) {
+        response.status = STATUS_ERROR;
+        CopyToBuffer(response.message, "Password is required.");
+        return response;
+    }
+
+    string tempKek;
+    AuthenticatedUser verifiedUser = dbHelper.AuthenticateUser(sessionUsername, password, tempKek);
+    SecureWipeString(password);
+
+    if (!verifiedUser.IsValid() || verifiedUser.id != sessionUserId) {
+        SecureWipeString(tempKek);
+        return BuildUnauthorizedResponse(REQ_ADMIN_VIEW_MY_INFO, "Re-authentication failed.");
+    }
+
+    PersonalRecord record;
+    const bool loaded = dbHelper.GetPersonalRecordForUser(sessionUserId, tempKek, record);
+    SecureWipeString(tempKek);
+
+    if (!loaded) {
+        response.status = STATUS_NOTFOUND;
+        CopyToBuffer(response.message, "Profile record was not found.");
+        return response;
+    }
+
+    response.status = STATUS_SUCCESS;
+    response.dataType = DATATYPE_PLAINTEXT;
+    RecordToPacket(record, response);
+    CopyToBuffer(response.message, "Own profile loaded.");
+    return response;
+}
+
+PacketData HandleAdminListMedicalRecords(DatabaseHelper& dbHelper,
+                                         bool isAuthenticated,
+                                         int sessionRole,
+                                         const PacketData& request) {
+    PacketData response;
+    InitializePacket(response);
+    response.requestType = REQ_ADMIN_LIST_MEDICAL_RECORDS;
+
+    if (!isAuthenticated) {
+        return BuildUnauthorizedResponse(REQ_ADMIN_LIST_MEDICAL_RECORDS, "Please login first.");
+    }
+
+    if (sessionRole != 3) {
+        return BuildUnauthorizedResponse(REQ_ADMIN_LIST_MEDICAL_RECORDS, "Admin role is required.");
+    }
+
+    const int offset = request.recordId < 0 ? 0 : request.recordId;
+    response.recordCount = dbHelper.GetTotalMedicalRecords();
+
+    MedicalRecordSummary record;
+    if (!dbHelper.GetMedicalRecordSummaryByOffset(offset, record)) {
+        response.status = STATUS_NOTFOUND;
+        CopyToBuffer(response.message, "No more medical records.");
+        return response;
+    }
+
+    record.diagnosisCipher = masking::masking_to_three_star(record.diagnosisCipher);
+    record.prescriptionCipher = masking::masking_to_three_star(record.prescriptionCipher);
+
+    response.status = STATUS_SUCCESS;
+    MedicalSummaryToPacket(record, response);
+    CopyToBuffer(response.message, "Medical records loaded.");
+    return response;
+}
+
+PacketData HandleDoctorListMyMedicalRecords(DatabaseHelper& dbHelper,
+                                            bool isAuthenticated,
+                                            int sessionRole,
+                                            int sessionUserId,
+                                            const PacketData& request) {
+    PacketData response;
+    InitializePacket(response);
+    response.requestType = REQ_DOCTOR_LIST_MY_MEDICAL_RECORDS;
+
+    if (!isAuthenticated) {
+        return BuildUnauthorizedResponse(REQ_DOCTOR_LIST_MY_MEDICAL_RECORDS, "Please login first.");
+    }
+
+    if (sessionRole != 2) {
+        return BuildUnauthorizedResponse(REQ_DOCTOR_LIST_MY_MEDICAL_RECORDS, "Doctor role is required.");
+    }
+
+    const int offset = request.recordId < 0 ? 0 : request.recordId;
+    response.recordCount = dbHelper.GetTotalMedicalRecordsForDoctor(sessionUserId);
+
+    MedicalRecordSummary record;
+    if (!dbHelper.GetMedicalRecordSummaryByDoctorOffset(sessionUserId, offset, record)) {
+        response.status = STATUS_NOTFOUND;
+        CopyToBuffer(response.message, "No more medical records.");
+        return response;
+    }
+
+    record.diagnosisCipher = masking::masking_to_three_star(record.diagnosisCipher);
+    record.prescriptionCipher = masking::masking_to_three_star(record.prescriptionCipher);
+
+    response.status = STATUS_SUCCESS;
+    MedicalSummaryToPacket(record, response);
+    CopyToBuffer(response.message, "Your medical records loaded.");
+    return response;
+}
+
+PacketData HandleDoctorCreateMedicalRecord(DatabaseHelper& dbHelper,
+                                           bool isAuthenticated,
+                                           int sessionRole,
+                                           int sessionUserId,
+                                           const string& sessionKek,
+                                           const PacketData& request) {
+    PacketData response;
+    InitializePacket(response);
+    response.requestType = REQ_DOCTOR_CREATE_MEDICAL_RECORD;
+
+    if (!isAuthenticated) {
+        return BuildUnauthorizedResponse(REQ_DOCTOR_CREATE_MEDICAL_RECORD, "Please login first.");
+    }
+
+    if (sessionRole != 2) {
+        return BuildUnauthorizedResponse(REQ_DOCTOR_CREATE_MEDICAL_RECORD, "Doctor role is required.");
+    }
+
+    const int patientId = request.userId;
+    const string visitDate = request.username;
+    const string department = request.cccd;
+    const string diagnosisCipher = request.phone;
+    const string prescriptionCipher = request.email;
+
+    if (patientId <= 0 || visitDate.empty() || diagnosisCipher.empty() || prescriptionCipher.empty()) {
+        response.status = STATUS_ERROR;
+        CopyToBuffer(response.message, "Patient id, visit date, diagnosis and prescription are required.");
+        return response;
+    }
+
+    const bool created = dbHelper.CreateMedicalRecord(
+        patientId,
+        sessionUserId,
+        visitDate,
+        department,
+        diagnosisCipher,
+        prescriptionCipher,
+        sessionKek);
+
+    response.status = created ? STATUS_SUCCESS : STATUS_ERROR;
+    CopyToBuffer(response.message, created ? "Medical record created." : "Failed to create medical record.");
+    return response;
+}
+
+PacketData HandleDoctorViewMedicalRecordDetail(DatabaseHelper& dbHelper,
+                                               bool isAuthenticated,
+                                               int sessionRole,
+                                               int sessionUserId,
+                                               const string& sessionUsername,
+                                               const PacketData& request) {
+    PacketData response;
+    InitializePacket(response);
+    response.requestType = REQ_DOCTOR_VIEW_MEDICAL_RECORD_DETAIL;
+
+    if (!isAuthenticated) {
+        return BuildUnauthorizedResponse(REQ_DOCTOR_VIEW_MEDICAL_RECORD_DETAIL, "Please login first.");
+    }
+
+    if (sessionRole != 2) {
+        return BuildUnauthorizedResponse(REQ_DOCTOR_VIEW_MEDICAL_RECORD_DETAIL, "Doctor role is required.");
+    }
+
+    const int medicalRecordId = request.recordId;
+    string password = request.password;
+    if (medicalRecordId <= 0 || password.empty()) {
+        response.status = STATUS_ERROR;
+        CopyToBuffer(response.message, "Medical record id and password are required.");
+        return response;
+    }
+
+    string tempKek;
+    AuthenticatedUser verifiedUser = dbHelper.AuthenticateUser(sessionUsername, password, tempKek);
+    SecureWipeString(password);
+
+    if (!verifiedUser.IsValid() || verifiedUser.id != sessionUserId || verifiedUser.role != 2) {
+        SecureWipeString(tempKek);
+        return BuildUnauthorizedResponse(REQ_DOCTOR_VIEW_MEDICAL_RECORD_DETAIL, "Re-authentication failed.");
+    }
+
+    MedicalRecordSummary record;
+    const bool loaded = dbHelper.GetMedicalRecordDetailForDoctor(sessionUserId, medicalRecordId, tempKek, record);
+    SecureWipeString(tempKek);
+
+    if (!loaded) {
+        response.status = STATUS_NOTFOUND;
+        CopyToBuffer(response.message, "Medical record was not found.");
+        return response;
+    }
+
+    response.status = STATUS_SUCCESS;
+    response.dataType = DATATYPE_PLAINTEXT;
+    MedicalSummaryToPacket(record, response);
+    CopyToBuffer(response.message, "Medical record detail loaded.");
+    return response;
+}
+
+PacketData HandleAdminDeleteUser(DatabaseHelper& dbHelper,
+                                 bool isAuthenticated,
+                                 int sessionRole,
+                                 int sessionUserId,
+                                 const PacketData& request) {
+    PacketData response;
+    InitializePacket(response);
+    response.requestType = REQ_ADMIN_DELETE_USER;
+
+    if (!isAuthenticated) {
+        return BuildUnauthorizedResponse(REQ_ADMIN_DELETE_USER, "Please login first.");
+    }
+
+    if (sessionRole != 3) {
+        return BuildUnauthorizedResponse(REQ_ADMIN_DELETE_USER, "Admin role is required.");
+    }
+
+    const int targetUserId = request.userId;
+    if (targetUserId <= 0) {
+        response.status = STATUS_ERROR;
+        CopyToBuffer(response.message, "Target user id is invalid.");
+        return response;
+    }
+
+    if (targetUserId == sessionUserId) {
+        response.status = STATUS_ERROR;
+        CopyToBuffer(response.message, "Use Delete Account to remove your own account.");
+        return response;
+    }
+
+    if (!dbHelper.UserExistsById(targetUserId)) {
+        response.status = STATUS_NOTFOUND;
+        CopyToBuffer(response.message, "Target user was not found.");
+        return response;
+    }
+
+    const bool deleted = dbHelper.DeleteUserById(targetUserId);
+    response.status = deleted ? STATUS_SUCCESS : STATUS_ERROR;
+    CopyToBuffer(response.message, deleted ? "User deleted successfully." : "Failed to delete user.");
+    return response;
+}
+
+PacketData HandleAdminUpdateUserRole(DatabaseHelper& dbHelper,
+                                     bool isAuthenticated,
+                                     int sessionRole,
+                                     int sessionUserId,
+                                     const PacketData& request) {
+    PacketData response;
+    InitializePacket(response);
+    response.requestType = REQ_ADMIN_UPDATE_USER_ROLE;
+
+    if (!isAuthenticated) {
+        return BuildUnauthorizedResponse(REQ_ADMIN_UPDATE_USER_ROLE, "Please login first.");
+    }
+
+    if (sessionRole != 3) {
+        return BuildUnauthorizedResponse(REQ_ADMIN_UPDATE_USER_ROLE, "Admin role is required.");
+    }
+
+    const int targetUserId = request.userId;
+    const int targetRole = request.role;
+
+    if (targetUserId <= 0) {
+        response.status = STATUS_ERROR;
+        CopyToBuffer(response.message, "Target user id is invalid.");
+        return response;
+    }
+
+    if (targetRole != 1 && targetRole != 2 && targetRole != 3) {
+        response.status = STATUS_ERROR;
+        CopyToBuffer(response.message, "Role must be 1 (user), 2 (doctor), or 3 (admin).");
+        return response;
+    }
+
+    if (targetUserId == sessionUserId) {
+        response.status = STATUS_ERROR;
+        CopyToBuffer(response.message, "Cannot change role of current login session.");
+        return response;
+    }
+
+    if (!dbHelper.UserExistsById(targetUserId)) {
+        response.status = STATUS_NOTFOUND;
+        CopyToBuffer(response.message, "Target user was not found.");
+        return response;
+    }
+
+    const bool updated = dbHelper.UpdateUserRoleById(targetUserId, targetRole);
+    response.status = updated ? STATUS_SUCCESS : STATUS_ERROR;
+    CopyToBuffer(response.message, updated ? "User role updated successfully." : "Failed to update user role.");
     return response;
 }
 
@@ -473,6 +808,27 @@ int main() {
                     break;
                 case REQ_ADMIN_LIST_USERS:
                     response = HandleAdminListUsers(dbHelper, isAuthenticated, sessionRole, sessionUserId, sessionKek, request);
+                    break;
+                case REQ_ADMIN_LIST_MEDICAL_RECORDS:
+                    response = HandleAdminListMedicalRecords(dbHelper, isAuthenticated, sessionRole, request);
+                    break;
+                case REQ_DOCTOR_LIST_MY_MEDICAL_RECORDS:
+                    response = HandleDoctorListMyMedicalRecords(dbHelper, isAuthenticated, sessionRole, sessionUserId, request);
+                    break;
+                case REQ_DOCTOR_CREATE_MEDICAL_RECORD:
+                    response = HandleDoctorCreateMedicalRecord(dbHelper, isAuthenticated, sessionRole, sessionUserId, sessionKek, request);
+                    break;
+                case REQ_DOCTOR_VIEW_MEDICAL_RECORD_DETAIL:
+                    response = HandleDoctorViewMedicalRecordDetail(dbHelper, isAuthenticated, sessionRole, sessionUserId, sessionUsername, request);
+                    break;
+                case REQ_ADMIN_VIEW_MY_INFO:
+                    response = HandleAdminViewMyInfo(dbHelper, isAuthenticated, sessionRole, sessionUserId, sessionUsername, request);
+                    break;
+                case REQ_ADMIN_DELETE_USER:
+                    response = HandleAdminDeleteUser(dbHelper, isAuthenticated, sessionRole, sessionUserId, request);
+                    break;
+                case REQ_ADMIN_UPDATE_USER_ROLE:
+                    response = HandleAdminUpdateUserRole(dbHelper, isAuthenticated, sessionRole, sessionUserId, request);
                     break;
                 case REQ_LOGOUT:
                     response = HandleLogout(isAuthenticated, sessionUserId, sessionRole, sessionUsername, sessionKek);

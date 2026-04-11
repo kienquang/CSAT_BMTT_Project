@@ -8,6 +8,7 @@ struct PersonalRecord {
     int userId = -1;
     int recordId = -1;
     std::string username;
+    std::string name;
     int role = 1;
     int gender = 0;
     std::string cccd;
@@ -24,6 +25,17 @@ struct AuthenticatedUser {
     bool IsValid() const {
         return id >= 0;
     }
+};
+
+struct MedicalRecordSummary {
+    int recordId = -1;
+    int patientId = -1;
+    std::string patientName;
+    int doctorId = -1;
+    std::string visitDate;
+    std::string department;
+    std::string diagnosisCipher;
+    std::string prescriptionCipher;
 };
 
 class DatabaseHelper {
@@ -64,6 +76,7 @@ public:
     bool Connect();
     bool InitializeSchema();
     bool RegisterUser(const std::string& username,
+                      const std::string& name,
                       const std::string& passwordPlaintext,
                       int gender,
                       const std::string& cccdPlaintext,
@@ -76,6 +89,7 @@ public:
     bool UpdatePersonalRecordForUser(int userId,
                                      const std::string& currentSessionKek,
                                      const std::string& newUsername,
+                                     const std::string& newName,
                                      const std::string& newPasswordPlaintext,
                                      bool updatePassword,
                                      int newGender,
@@ -84,8 +98,25 @@ public:
                                      const std::string& newEmailPlaintext,
                                      std::string& updatedSessionKek);
     bool DeleteUserById(int userId);
+    bool UserExistsById(int userId);
+    bool UpdateUserRoleById(int userId, int newRole);
+    bool CreateMedicalRecord(int patientId,
+                             int doctorId,
+                             const std::string& visitDate,
+                             const std::string& department,
+                             const std::string& diagnosisPlaintext,
+                             const std::string& prescriptionPlaintext,
+                             const std::string& doctorKek);
     int GetTotalUsers();
+    int GetTotalMedicalRecords();
+    int GetTotalMedicalRecordsForDoctor(int doctorId);
     bool GetEncryptedUserRecordByOffset(int offset, PersonalRecord& record);
+    bool GetMedicalRecordSummaryByOffset(int offset, MedicalRecordSummary& record);
+    bool GetMedicalRecordSummaryByDoctorOffset(int doctorId, int offset, MedicalRecordSummary& record);
+    bool GetMedicalRecordDetailForDoctor(int doctorId,
+                                         int recordId,
+                                         const std::string& doctorKek,
+                                         MedicalRecordSummary& record);
     AuthenticatedUser AuthenticateUser(const std::string& username,
                                        const std::string& passwordPlaintext,
                                        std::string& derivedSessionKek);

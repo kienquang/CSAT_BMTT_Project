@@ -33,6 +33,7 @@ PersonalRecord PacketToRecord(const PacketData& packet) {
     record.userId = packet.userId;
     record.recordId = packet.recordId;
     record.username = packet.username;
+    record.name = packet.name;
     record.role = packet.role;
     record.gender = packet.gender;
     record.cccd = packet.cccd;
@@ -49,6 +50,7 @@ void RecordToPacket(const PersonalRecord& record, const string& passwordPlaintex
     packet.role = record.role;
     packet.gender = record.gender;
     CopyToBuffer(packet.username, record.username);
+    CopyToBuffer(packet.name, record.name);
     CopyToBuffer(packet.password, passwordPlaintext);
     CopyToBuffer(packet.cccd, record.cccd);
     CopyToBuffer(packet.phone, record.phone);
@@ -372,6 +374,253 @@ bool NetworkClient::FetchEncryptedUserList(vector<PersonalRecord>& records, stri
         if (totalHint >= 0 && static_cast<int>(records.size()) >= totalHint) {
             break;
         }
+    }
+
+    return true;
+}
+
+bool NetworkClient::FetchMedicalRecordList(vector<MedicalRecordListItem>& records, string& error) {
+    records.clear();
+
+    int totalHint = -1;
+    for (int offset = 0;; ++offset) {
+        PacketData request;
+        PacketData response;
+        InitializePacket(request);
+        request.requestType = REQ_ADMIN_LIST_MEDICAL_RECORDS;
+        request.recordId = offset;
+
+        if (!SendRequest(request, response, error)) {
+            return false;
+        }
+
+        if (response.status == STATUS_NOTFOUND) {
+            break;
+        }
+
+        if (response.status != STATUS_SUCCESS) {
+            error = response.message;
+            return false;
+        }
+
+        MedicalRecordListItem item;
+        item.recordId = response.recordId;
+        item.patientId = response.userId;
+        item.patientName = response.name;
+        item.doctorId = response.role;
+        item.visitDate = response.username;
+        item.department = response.cccd;
+        item.diagnosis = response.phone;
+        item.prescription = response.email;
+        records.push_back(item);
+
+        if (response.recordCount >= 0) {
+            totalHint = response.recordCount;
+        }
+
+        if (totalHint >= 0 && static_cast<int>(records.size()) >= totalHint) {
+            break;
+        }
+    }
+
+    return true;
+}
+
+bool NetworkClient::FetchMyMedicalRecordList(vector<MedicalRecordListItem>& records, string& error) {
+    records.clear();
+
+    int totalHint = -1;
+    for (int offset = 0;; ++offset) {
+        PacketData request;
+        PacketData response;
+        InitializePacket(request);
+        request.requestType = REQ_DOCTOR_LIST_MY_MEDICAL_RECORDS;
+        request.recordId = offset;
+
+        if (!SendRequest(request, response, error)) {
+            return false;
+        }
+
+        if (response.status == STATUS_NOTFOUND) {
+            break;
+        }
+
+        if (response.status != STATUS_SUCCESS) {
+            error = response.message;
+            return false;
+        }
+
+        MedicalRecordListItem item;
+        item.recordId = response.recordId;
+        item.patientId = response.userId;
+        item.patientName = response.name;
+        item.doctorId = response.role;
+        item.visitDate = response.username;
+        item.department = response.cccd;
+        item.diagnosis = response.phone;
+        item.prescription = response.email;
+        records.push_back(item);
+
+        if (response.recordCount >= 0) {
+            totalHint = response.recordCount;
+        }
+
+        if (totalHint >= 0 && static_cast<int>(records.size()) >= totalHint) {
+            break;
+        }
+    }
+
+    return true;
+}
+
+bool NetworkClient::CreateMedicalRecord(int patientId,
+                                        const string& visitDate,
+                                        const string& department,
+                                        const string& diagnosis,
+                                        const string& prescription,
+                                        string& error) {
+    if (patientId <= 0) {
+        error = "Patient id must be positive";
+        return false;
+    }
+
+    if (visitDate.empty() || diagnosis.empty() || prescription.empty()) {
+        error = "Visit date, diagnosis and prescription are required";
+        return false;
+    }
+
+    PacketData request;
+    PacketData response;
+    InitializePacket(request);
+    request.requestType = REQ_DOCTOR_CREATE_MEDICAL_RECORD;
+    request.userId = patientId;
+    CopyToBuffer(request.username, visitDate);
+    CopyToBuffer(request.cccd, department);
+    CopyToBuffer(request.phone, diagnosis);
+    CopyToBuffer(request.email, prescription);
+
+    if (!SendRequest(request, response, error)) {
+        return false;
+    }
+
+    if (response.status != STATUS_SUCCESS) {
+        error = response.message;
+        return false;
+    }
+
+    return true;
+}
+
+bool NetworkClient::FetchMedicalRecordDetailForDoctor(int medicalRecordId,
+                                                      const string& passwordPlaintext,
+                                                      MedicalRecordListItem& record,
+                                                      string& error) {
+    if (medicalRecordId <= 0) {
+        error = "Medical record id must be positive";
+        return false;
+    }
+
+    if (passwordPlaintext.empty()) {
+        error = "Password must not be empty";
+        return false;
+    }
+
+    PacketData request;
+    PacketData response;
+    InitializePacket(request);
+    request.requestType = REQ_DOCTOR_VIEW_MEDICAL_RECORD_DETAIL;
+    request.recordId = medicalRecordId;
+    CopyToBuffer(request.password, passwordPlaintext);
+
+    if (!SendRequest(request, response, error)) {
+        return false;
+    }
+
+    if (response.status != STATUS_SUCCESS) {
+        error = response.message;
+        return false;
+    }
+
+    record.recordId = response.recordId;
+    record.patientId = response.userId;
+    record.patientName = response.name;
+    record.doctorId = response.role;
+    record.visitDate = response.username;
+    record.department = response.cccd;
+    record.diagnosis = response.phone;
+    record.prescription = response.email;
+    return true;
+}
+
+bool NetworkClient::FetchMyInfoForAdmin(const string& passwordPlaintext, PersonalRecord& record, string& error) {
+    if (passwordPlaintext.empty()) {
+        error = "Password must not be empty";
+        return false;
+    }
+
+    PacketData request;
+    PacketData response;
+    InitializePacket(request);
+    request.requestType = REQ_ADMIN_VIEW_MY_INFO;
+    CopyToBuffer(request.password, passwordPlaintext);
+
+    if (!SendRequest(request, response, error)) {
+        return false;
+    }
+
+    if (response.status != STATUS_SUCCESS) {
+        error = response.message;
+        return false;
+    }
+
+    record = PacketToRecord(response);
+    return true;
+}
+
+bool NetworkClient::AdminDeleteUser(int userId, string& error) {
+    if (userId <= 0) {
+        error = "Invalid user id";
+        return false;
+    }
+
+    PacketData request;
+    PacketData response;
+    InitializePacket(request);
+    request.requestType = REQ_ADMIN_DELETE_USER;
+    request.userId = userId;
+
+    if (!SendRequest(request, response, error)) {
+        return false;
+    }
+
+    if (response.status != STATUS_SUCCESS) {
+        error = response.message;
+        return false;
+    }
+
+    return true;
+}
+
+bool NetworkClient::AdminUpdateUserRole(int userId, int newRole, string& error) {
+    if (userId <= 0) {
+        error = "Invalid user id";
+        return false;
+    }
+
+    PacketData request;
+    PacketData response;
+    InitializePacket(request);
+    request.requestType = REQ_ADMIN_UPDATE_USER_ROLE;
+    request.userId = userId;
+    request.role = newRole;
+
+    if (!SendRequest(request, response, error)) {
+        return false;
+    }
+
+    if (response.status != STATUS_SUCCESS) {
+        error = response.message;
+        return false;
     }
 
     return true;
