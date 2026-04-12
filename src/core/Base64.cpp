@@ -5,6 +5,7 @@
 
 namespace {
 
+// [GROUP: Lookup Tables]
 constexpr char kEncodeTable[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     "abcdefghijklmnopqrstuvwxyz"
@@ -25,6 +26,7 @@ std::array<int, 256> BuildDecodeTable() {
 
 namespace Base64 {
 
+// [GROUP: Public API]
 std::string Encode(const std::string& input) {
     if (input.empty()) {
         return "";
@@ -50,6 +52,7 @@ std::string Encode(const std::string& input) {
     return output;
 }
 
+// [GROUP: Public API]
 bool Decode(const std::string& input, std::string& output) {
     output.clear();
 

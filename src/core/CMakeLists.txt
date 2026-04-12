@@ -1,5 +1,4 @@
-# ======== CORE LIBRARY - Encryption & Database ========
-# This library contains core functionality for encryption and database operations
+# [GROUP: Source Lists]
 
 set(CORE_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/Base64.h
@@ -9,6 +8,7 @@ set(CORE_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/masking.h
     ${CMAKE_CURRENT_SOURCE_DIR}/PasswordHasher.h
     ${CMAKE_CURRENT_SOURCE_DIR}/SecureRandom.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/TlsSocket.h
 )
 
 set(CORE_SOURCES
@@ -19,6 +19,7 @@ set(CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/masking.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/PasswordHasher.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/SecureRandom.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/TlsSocket.cpp
 )
 
 set(ARGON2_ROOT ${CMAKE_SOURCE_DIR}/third_party/argon2)
@@ -38,10 +39,10 @@ target_include_directories(argon2_lib PUBLIC
     ${ARGON2_ROOT}/src
 )
 
-# Create static library for core functionality
+# [GROUP: Core Library]
 add_library(core_lib STATIC ${CORE_SOURCES} ${CORE_HEADERS})
 
-# Set include directories for core library
+# [GROUP: Include Paths]
 target_include_directories(core_lib PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${MYSQL_INCLUDE_DIR}
@@ -49,11 +50,11 @@ target_include_directories(core_lib PUBLIC
     ${ARGON2_ROOT}/include
 )
 
-# Link MySQL libraries
+# [GROUP: Linkage]
 target_link_directories(core_lib PRIVATE ${MYSQL_LIB_DIR})
 target_link_libraries(core_lib PUBLIC mysqlcppconn argon2_lib)
 
 if(WIN32)
-    target_link_libraries(core_lib PUBLIC bcrypt)
+    target_link_libraries(core_lib PUBLIC bcrypt secur32 crypt32)
 endif()
 

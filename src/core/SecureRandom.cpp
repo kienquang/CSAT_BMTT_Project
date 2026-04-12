@@ -14,6 +14,7 @@
 
 namespace SecureRandom {
 
+// [GROUP: Public API]
 bool Fill(uint8_t* buffer, size_t length) {
     if (length == 0) {
         return true;
@@ -56,6 +57,7 @@ bool Fill(uint8_t* buffer, size_t length) {
 #endif
 }
 
+// [GROUP: Public API]
 std::vector<uint8_t> RandomBytes(size_t length) {
     std::vector<uint8_t> bytes(length);
     if (!Fill(bytes.data(), bytes.size())) {

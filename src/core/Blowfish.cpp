@@ -6,7 +6,7 @@
 
 using namespace std;
 
-// 1. Hàm F (Mạng Feistel)
+// [GROUP: Internal Helpers]
 uint32_t Blowfish::F(uint32_t x) {
     uint8_t a = x >> 24;
     uint8_t b = x >> 16;
@@ -15,7 +15,7 @@ uint32_t Blowfish::F(uint32_t x) {
     return ((S[0][a] + S[1][b]) ^ S[2][c]) + S[3][d];
 }
 
-// 2. Khởi tạo mảng P và S mặc định
+// [GROUP: Internal Helpers]
 void Blowfish::InitializeDefaultArrays() {
     static const uint32_t default_P[18] = {
         0x243f6a88, 0x85a308d3, 0x13198a2e, 0x03707344, 0xa4093822, 0x299f31d0,
@@ -23,7 +23,7 @@ void Blowfish::InitializeDefaultArrays() {
         0xc0ac29b7, 0xc97c50dd, 0x3f84d5b5, 0xb5470917, 0x9216d5d9, 0x8979fb1b
     };
 
-    // 2. S-Boxes chuẩn (4 mảng, mỗi mảng 256 phần tử - Tổng 1024 số)
+    // [GROUP: Blowfish Constants]
     static const uint32_t initial_S[4][256] = {
         { // S-box 0
             0xD1310BA6, 0x98DFB5AC, 0x2FFD72DB, 0xD01ADFB7, 0xB8E1AFED, 0x6A267E96, 0xBA7C9045, 0xF12C7F99,
@@ -164,7 +164,7 @@ void Blowfish::InitializeDefaultArrays() {
     };
     for (int i = 0; i < 18; i++) P[i] = default_P[i];
 
-    // Khởi tạo 4 mảng S với giá trị giả lập để minh họa (Sẽ được Key Expansion xáo trộn lại)
+    // [GROUP: State Initialization]
     for (int i = 0; i < 4; i++) {
         for (int j = 0; j < 256; j++) {
             S[i][j] = initial_S[i][j];
@@ -172,7 +172,7 @@ void Blowfish::InitializeDefaultArrays() {
     }
 }
 
-// 3. Hàm khởi tạo (Key Expansion)
+// [GROUP: Public API]
 Blowfish::Blowfish(const string& key) {
     InitializeDefaultArrays();
 
@@ -206,7 +206,7 @@ Blowfish::Blowfish(const string& key) {
     }
 }
 
-// 4. Mã hóa 1 khối 64-bit
+// [GROUP: Internal Helpers]
 void Blowfish::EncryptBlock(uint32_t& L, uint32_t& R) {
     for (int i = 0; i < 16; i++) {
         L ^= P[i];
@@ -218,7 +218,7 @@ void Blowfish::EncryptBlock(uint32_t& L, uint32_t& R) {
     L ^= P[17];
 }
 
-// 5. Giải mã 1 khối 64-bit
+// [GROUP: Internal Helpers]
 void Blowfish::DecryptBlock(uint32_t& L, uint32_t& R) {
     for (int i = 17; i > 1; i--) {
         L ^= P[i];
@@ -230,7 +230,7 @@ void Blowfish::DecryptBlock(uint32_t& L, uint32_t& R) {
     L ^= P[0];
 }
 
-// 6. Ma hoa chuoi String thanh chuoi HEX (Phuc vu luu Database)
+// [GROUP: Public API]
 string Blowfish::EncryptString(const string& text) {
     string paddedText = text;
     while (paddedText.length() % 8 != 0) {
@@ -263,7 +263,7 @@ string Blowfish::EncryptString(const string& text) {
     return hexStream.str();
 }
 
-// 7. Giai ma chuoi HEX tro lai String nguyen ban
+// [GROUP: Public API]
 string Blowfish::DecryptString(const string& hexText) {
     string result = "";
     for (size_t i = 0; i < hexText.length(); i += 16) {

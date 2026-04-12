@@ -5,7 +5,6 @@
 
 #include <cstring>
 
-#include "../../core/Blowfish.h"
 #include "../../core/EnvConfig.h"
 #include "../../shared/NetworkData.h"
 
@@ -15,6 +14,7 @@ using namespace std;
 
 namespace {
 
+// [GROUP: Packet Field Helpers]
 template <size_t N>
 void CopyToBuffer(char (&dest)[N], const string& value) {
     memset(dest, 0, N);
@@ -23,11 +23,13 @@ void CopyToBuffer(char (&dest)[N], const string& value) {
     }
 }
 
+// [GROUP: Packet Initialization And Mapping]
 void InitializePacket(PacketData& packet) {
     memset(&packet, 0, sizeof(PacketData));
     packet.protocolVersion = PROTOCOL_VERSION;
 }
 
+// [GROUP: Profile Serialization Helpers]
 PersonalRecord PacketToRecord(const PacketData& packet) {
     PersonalRecord record;
     record.userId = packet.userId;
@@ -58,29 +60,10 @@ void RecordToPacket(const PersonalRecord& record, const string& passwordPlaintex
     CopyToBuffer(packet.encryptedDek, record.encryptedDek);
 }
 
-bool EncryptLoginPayload(const string& username, const string& password, PacketData& request, string& error) {
-    const string loginKey = EnvConfig::GetString("APP_LOGIN_BLOWFISH_KEY");
-    if (loginKey.empty()) {
-        error = "Missing APP_LOGIN_BLOWFISH_KEY in client .env";
-        return false;
-    }
-
-    Blowfish cipher(loginKey);
-    const string encryptedPayload = cipher.EncryptString(username + "|" + password);
-    if (!WriteLoginCiphertext(request, encryptedPayload)) {
-        error = "Encrypted login payload exceeds packet capacity";
-        return false;
-    }
-
-    request.dataType = DATATYPE_LOGIN_BLOWFISH;
-    return true;
-}
-
 }  // namespace
 
 NetworkClient::NetworkClient()
-    : port_(0),
-      connected_(false),
+    : connected_(false),
       currentUserId_(-1),
       socketValue_(static_cast<unsigned long long>(INVALID_SOCKET)) {
 }
@@ -124,8 +107,13 @@ bool NetworkClient::Connect(const string& host, int port, string& error) {
         return false;
     }
 
-    host_ = host;
-    port_ = port;
+    const bool insecureSkipVerify = EnvConfig::GetInt("APP_TLS_INSECURE_SKIP_VERIFY", 1) != 0;
+    if (!tlsSocket_.InitializeClient(socketHandle, host, insecureSkipVerify, error)) {
+        closesocket(socketHandle);
+        WSACleanup();
+        return false;
+    }
+
     connected_ = true;
     socketValue_ = static_cast<unsigned long long>(socketHandle);
     return true;
@@ -137,6 +125,7 @@ void NetworkClient::Disconnect() {
     }
 
     SOCKET socketHandle = static_cast<SOCKET>(socketValue_);
+    tlsSocket_.Shutdown();
     closesocket(socketHandle);
     connected_ = false;
     socketValue_ = static_cast<unsigned long long>(INVALID_SOCKET);
@@ -150,29 +139,11 @@ bool NetworkClient::IsConnected() const {
 }
 
 bool NetworkClient::SendAll(const char* data, int totalBytes) {
-    SOCKET socketHandle = static_cast<SOCKET>(socketValue_);
-    int sentBytes = 0;
-    while (sentBytes < totalBytes) {
-        const int sent = send(socketHandle, data + sentBytes, totalBytes - sentBytes, 0);
-        if (sent == SOCKET_ERROR) {
-            return false;
-        }
-        sentBytes += sent;
-    }
-    return true;
+    return tlsSocket_.SendAll(data, totalBytes);
 }
 
 bool NetworkClient::RecvAll(char* data, int totalBytes) {
-    SOCKET socketHandle = static_cast<SOCKET>(socketValue_);
-    int receivedBytes = 0;
-    while (receivedBytes < totalBytes) {
-        const int received = recv(socketHandle, data + receivedBytes, totalBytes - receivedBytes, 0);
-        if (received <= 0) {
-            return false;
-        }
-        receivedBytes += received;
-    }
-    return true;
+    return tlsSocket_.RecvAll(data, totalBytes);
 }
 
 bool NetworkClient::SendRequest(const PacketData& request, PacketData& response, string& error) {
@@ -199,9 +170,9 @@ bool NetworkClient::Login(const string& username, const string& password, LoginR
     PacketData response;
     InitializePacket(request);
     request.requestType = REQ_LOGIN;
-    if (!EncryptLoginPayload(username, password, request, error)) {
-        return false;
-    }
+    request.dataType = DATATYPE_PLAINTEXT;
+    CopyToBuffer(request.username, username);
+    CopyToBuffer(request.password, password);
 
     if (!SendRequest(request, response, error)) {
         return false;
@@ -277,10 +248,14 @@ bool NetworkClient::Register(const PersonalRecord& record, const string& passwor
     return true;
 }
 
-bool NetworkClient::UpdateProfile(const PersonalRecord& record, const string& passwordPlaintext, string& error) {
+bool NetworkClient::UpdateProfile(const PersonalRecord& record,
+                                  const string& passwordPlaintext,
+                                  string& error,
+                                  const string& currentPasswordPlaintext) {
     PacketData request;
     PacketData response;
     RecordToPacket(record, passwordPlaintext, request);
+    CopyToBuffer(request.message, currentPasswordPlaintext);
     request.requestType = REQ_UPDATE_PROFILE;
 
     if (!SendRequest(request, response, error)) {
@@ -408,6 +383,7 @@ bool NetworkClient::FetchMedicalRecordList(vector<MedicalRecordListItem>& record
         item.patientId = response.userId;
         item.patientName = response.name;
         item.doctorId = response.role;
+        item.doctorName = response.encryptedDek;
         item.visitDate = response.username;
         item.department = response.cccd;
         item.diagnosis = response.phone;
@@ -455,6 +431,7 @@ bool NetworkClient::FetchMyMedicalRecordList(vector<MedicalRecordListItem>& reco
         item.patientId = response.userId;
         item.patientName = response.name;
         item.doctorId = response.role;
+        item.doctorName = response.encryptedDek;
         item.visitDate = response.username;
         item.department = response.cccd;
         item.diagnosis = response.phone;
@@ -545,6 +522,7 @@ bool NetworkClient::FetchMedicalRecordDetailForDoctor(int medicalRecordId,
     record.patientId = response.userId;
     record.patientName = response.name;
     record.doctorId = response.role;
+    record.doctorName = response.encryptedDek;
     record.visitDate = response.username;
     record.department = response.cccd;
     record.diagnosis = response.phone;

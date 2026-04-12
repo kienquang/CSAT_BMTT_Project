@@ -5,6 +5,7 @@
 
 namespace {
 
+// [GROUP: Internal Helpers]
 bool IsDigitsOnly(const std::string& value) {
     if (value.empty()) {
         return false;
@@ -18,6 +19,7 @@ bool IsDigitsOnly(const std::string& value) {
     return true;
 }
 
+// [GROUP: Internal Helpers]
 std::string MakeStars(size_t count) {
     return std::string(count, '*');
 }
@@ -26,6 +28,7 @@ std::string MakeStars(size_t count) {
 
 namespace masking {
 
+// [GROUP: Public API]
 std::string masking_phone(const std::string& value) {
     // Encrypted values are not digit-only, so we mask by expected phone length.
     if (IsDigitsOnly(value)) {
@@ -34,6 +37,7 @@ std::string masking_phone(const std::string& value) {
     return MakeStars(10);
 }
 
+// [GROUP: Public API]
 std::string masking_cccd(const std::string& value) {
     // Encrypted values are not digit-only, so we mask by expected CCCD length.
     if (IsDigitsOnly(value)) {
@@ -42,11 +46,13 @@ std::string masking_cccd(const std::string& value) {
     return MakeStars(12);
 }
 
+// [GROUP: Public API]
 std::string masking_email(const std::string& value) {
     (void)value;
     return "******@*****.com";
 }
 
+// [GROUP: Public API]
 std::string masking_to_three_star(const std::string& value) {
     (void)value;
     return "***";

@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "../../core/DatabaseHelper.h"
+#include "../../core/TlsSocket.h"
 
 struct PacketData;
 
@@ -13,6 +14,7 @@ struct MedicalRecordListItem {
     int patientId = -1;
     std::string patientName;
     int doctorId = -1;
+    std::string doctorName;
     std::string visitDate;
     std::string department;
     std::string diagnosis;
@@ -41,7 +43,10 @@ public:
 
     bool FetchProfile(PersonalRecord& record, std::string& error);
     bool Register(const PersonalRecord& record, const std::string& passwordPlaintext, std::string& error);
-    bool UpdateProfile(const PersonalRecord& record, const std::string& passwordPlaintext, std::string& error);
+    bool UpdateProfile(const PersonalRecord& record,
+                       const std::string& passwordPlaintext,
+                       std::string& error,
+                       const std::string& currentPasswordPlaintext = "");
     bool DeleteAccount(std::string& error);
     bool GetTotalUsers(int& total, std::string& error);
     bool FetchEncryptedUserList(std::vector<PersonalRecord>& records, std::string& error);
@@ -66,12 +71,11 @@ private:
     bool RecvAll(char* data, int totalBytes);
     bool SendRequest(const PacketData& request, PacketData& response, std::string& error);
 
-    std::string host_;
-    int port_;
     bool connected_;
     std::string currentUsername_;
     int currentUserId_;
     unsigned long long socketValue_;
+    TlsSocket tlsSocket_;
 };
 
 #endif  // NETWORK_CLIENT_H

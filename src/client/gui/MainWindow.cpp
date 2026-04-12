@@ -1,21 +1,29 @@
 #include "MainWindow.h"
 
 #include "EmployeeDialog.h"
+#include "MedicalRecordDetailDialog.h"
 #include "ui_MainWindow.h"
 #include "../network/NetworkClient.h"
 
 #include <QApplication>
 #include <QDate>
+#include <QDialog>
 #include <QHeaderView>
+#include <QHBoxLayout>
 #include <QInputDialog>
+#include <QLabel>
 #include <QMessageBox>
+#include <QPushButton>
 #include <QTableWidgetItem>
+#include <QVBoxLayout>
+#include <QFont>
 
 #include <iostream>
 #include <stdexcept>
 
 namespace {
 
+// [GROUP: Validation Helpers]
 bool IsDigitsOnly(const QString& value) {
     if (value.isEmpty()) {
         return false;
@@ -63,6 +71,7 @@ bool ValidateRecordData(const EmployeeDialog::RecordData& data, QString& error) 
     return true;
 }
 
+// [GROUP: Text Formatting Helpers]
 QString GenderToLabel(int gender) {
     return gender == 2 ? "Female" : "Male";
 }
@@ -93,6 +102,32 @@ bool IsAdminRole(int role) {
 
 bool IsDoctorRole(int role) {
     return role == 2;
+}
+
+// [GROUP: Masking Helpers]
+QString MaskKeepLast(const std::string& value, int keepLast) {
+    const QString text = QString::fromStdString(value);
+    if (text.isEmpty()) {
+        return text;
+    }
+
+    if (keepLast <= 0 || text.size() <= keepLast) {
+        return QString(text.size(), '*');
+    }
+
+    return QString(text.size() - keepLast, '*') + text.right(keepLast);
+}
+
+QString MaskEmail(const std::string& email) {
+    const QString value = QString::fromStdString(email);
+    const int atPos = value.indexOf('@');
+    if (atPos <= 1) {
+        return "***";
+    }
+
+    const QString local = value.left(atPos);
+    const QString domain = value.mid(atPos);
+    return local.left(1) + QString(local.size() - 1, '*') + domain;
 }
 
 }  // namespace
@@ -142,6 +177,10 @@ bool MainWindow::isAdminMode() const {
 
 bool MainWindow::isDoctorMode() const {
     return IsDoctorRole(currentRole);
+}
+
+bool MainWindow::isUserMode() const {
+    return currentRole == 1;
 }
 
 bool MainWindow::isAdminUsersTabActive() const {
@@ -200,23 +239,22 @@ void MainWindow::configureUiForRole() {
         return;
     }
 
-    ui->titleLabel->setText("User Dashboard (Coming Soon)");
+    ui->titleLabel->setText("User - My Medical Records");
     ui->addBtn->setVisible(true);
-    ui->editBtn->setVisible(true);
-    ui->deleteBtn->setVisible(true);
-    ui->editBtn->setText("Edit Profile");
-    ui->deleteBtn->setText("Delete Account");
-    ui->addBtn->setEnabled(false);
+    ui->addBtn->setText("Refresh Records");
+    ui->addBtn->setEnabled(true);
+    ui->editBtn->setVisible(false);
+    ui->deleteBtn->setVisible(false);
     ui->editBtn->setEnabled(false);
     ui->deleteBtn->setEnabled(false);
-    ui->viewMyInfoBtn->setVisible(false);
-    ui->viewMyInfoBtn->setEnabled(false);
+    ui->viewMyInfoBtn->setVisible(true);
+    ui->viewMyInfoBtn->setEnabled(true);
     ui->adminTabWidget->setVisible(false);
     ui->adminTabWidget->setEnabled(false);
     ui->doctorCreateGroup->setVisible(false);
     ui->employeeTable->setVisible(true);
-    ui->searchBox->setEnabled(false);
-    ui->searchBox->setPlaceholderText("This interface will be available soon.");
+    ui->searchBox->setEnabled(true);
+    ui->searchBox->setPlaceholderText("Search your medical records...");
 }
 
 void MainWindow::loadAdminUserList() {
@@ -288,19 +326,44 @@ void MainWindow::loadDoctorMedicalRecordList() {
     populateMedicalRecordTable(records);
 }
 
+void MainWindow::loadUserMedicalRecordList() {
+    std::string error;
+    std::vector<MedicalRecordListItem> records;
+    if (!networkClient->FetchMyMedicalRecordList(records, error)) {
+        throw std::runtime_error(error);
+    }
+
+    populateMedicalRecordTable(records);
+}
+
 void MainWindow::populateMedicalRecordTable(const std::vector<MedicalRecordListItem>& records) {
     ui->employeeTable->setRowCount(0);
-    ui->employeeTable->setColumnCount(8);
-    ui->employeeTable->setHorizontalHeaderLabels(QStringList{
-        "Medical ID",
-        "Patient ID",
-        "Patient Name",
-        "Doctor ID",
-        "Visit Date",
-        "Department",
-        "Diagnosis",
-        "Prescription"
-    });
+    if (isUserMode()) {
+        ui->employeeTable->setColumnCount(9);
+        ui->employeeTable->setHorizontalHeaderLabels(QStringList{
+            "Medical ID",
+            "Patient ID",
+            "Patient Name",
+            "Doctor ID",
+            "Doctor Name",
+            "Visit Date",
+            "Department",
+            "Diagnosis",
+            "Prescription"
+        });
+    } else {
+        ui->employeeTable->setColumnCount(8);
+        ui->employeeTable->setHorizontalHeaderLabels(QStringList{
+            "Medical ID",
+            "Patient ID",
+            "Patient Name",
+            "Doctor ID",
+            "Visit Date",
+            "Department",
+            "Diagnosis",
+            "Prescription"
+        });
+    }
 
     for (int i = 0; i < static_cast<int>(records.size()); ++i) {
         const MedicalRecordListItem& record = records[static_cast<size_t>(i)];
@@ -309,10 +372,18 @@ void MainWindow::populateMedicalRecordTable(const std::vector<MedicalRecordListI
         ui->employeeTable->setItem(i, 1, new QTableWidgetItem(QString::number(record.patientId)));
         ui->employeeTable->setItem(i, 2, new QTableWidgetItem(QString::fromStdString(record.patientName)));
         ui->employeeTable->setItem(i, 3, new QTableWidgetItem(QString::number(record.doctorId)));
-        ui->employeeTable->setItem(i, 4, new QTableWidgetItem(QString::fromStdString(record.visitDate)));
-        ui->employeeTable->setItem(i, 5, new QTableWidgetItem(QString::fromStdString(record.department)));
-        ui->employeeTable->setItem(i, 6, new QTableWidgetItem(QString::fromStdString(record.diagnosis)));
-        ui->employeeTable->setItem(i, 7, new QTableWidgetItem(QString::fromStdString(record.prescription)));
+        if (isUserMode()) {
+            ui->employeeTable->setItem(i, 4, new QTableWidgetItem(QString::fromStdString(record.doctorName)));
+            ui->employeeTable->setItem(i, 5, new QTableWidgetItem(QString::fromStdString(record.visitDate)));
+            ui->employeeTable->setItem(i, 6, new QTableWidgetItem(QString::fromStdString(record.department)));
+            ui->employeeTable->setItem(i, 7, new QTableWidgetItem(QString::fromStdString(record.diagnosis)));
+            ui->employeeTable->setItem(i, 8, new QTableWidgetItem(QString::fromStdString(record.prescription)));
+        } else {
+            ui->employeeTable->setItem(i, 4, new QTableWidgetItem(QString::fromStdString(record.visitDate)));
+            ui->employeeTable->setItem(i, 5, new QTableWidgetItem(QString::fromStdString(record.department)));
+            ui->employeeTable->setItem(i, 6, new QTableWidgetItem(QString::fromStdString(record.diagnosis)));
+            ui->employeeTable->setItem(i, 7, new QTableWidgetItem(QString::fromStdString(record.prescription)));
+        }
     }
 
     hasLoadedRecord = false;
@@ -369,15 +440,111 @@ bool MainWindow::promptPasswordForSensitiveAction(const QString& title,
 }
 
 void MainWindow::applyStyles() {
+    setFont(QFont("Segoe UI", 10));
+
     setStyleSheet(
-        "QMainWindow { background-color: #ecf0f1; }"
-        "QPushButton { padding: 5px 10px; border-radius: 3px; font-weight: bold; }"
-        "QPushButton:hover { opacity: 0.8; }"
-        "QTableWidget { background-color: white; }"
-        "QLineEdit { padding: 5px; border: 1px solid #bdc3c7; border-radius: 3px; }"
+        "QMainWindow { background-color: #eaf4f5; color: #163239; }"
+        "QWidget { color: #163239; }"
+
+        "QLabel#titleLabel { font-size: 22px; font-weight: 700; color: #0c3d45; }"
+        "QLabel#userLabel { color: #3b5560; font-weight: 600; }"
+
+        "QLineEdit, QTextEdit, QDateEdit, QPlainTextEdit {"
+        "  background-color: #ffffff;"
+        "  border: 1px solid #b8d4d8;"
+        "  border-radius: 8px;"
+        "  padding: 7px 9px;"
+        "  selection-background-color: #1f8b99;"
+        "}"
+        "QLineEdit:focus, QTextEdit:focus, QDateEdit:focus, QPlainTextEdit:focus {"
+        "  border: 1px solid #1f8b99;"
+        "}"
+
+        "QPushButton {"
+        "  border-radius: 9px;"
+        "  border: none;"
+        "  padding: 8px 14px;"
+        "  font-weight: 700;"
+        "  background-color: #2a9cab;"
+        "  color: #ffffff;"
+        "}"
+        "QPushButton:hover { background-color: #228595; }"
+        "QPushButton:pressed { background-color: #1c6f7d; }"
+        "QPushButton:disabled { background-color: #b7c7cc; color: #edf3f4; }"
+
+        "QPushButton#viewMyInfoBtn { background-color: #2f8f95; }"
+        "QPushButton#viewMyInfoBtn:hover { background-color: #28797e; }"
+        "QPushButton#logoutBtn { background-color: #cf5a52; }"
+        "QPushButton#logoutBtn:hover { background-color: #b84e47; }"
+        "QPushButton#editBtn { background-color: #c58a2e; }"
+        "QPushButton#editBtn:hover { background-color: #a97827; }"
+        "QPushButton#deleteBtn { background-color: #bf4d48; }"
+        "QPushButton#createMedicalRecordBtn { background-color: #1e8d72; }"
+        "QPushButton#createMedicalRecordBtn:hover { background-color: #19755f; }"
+
+        "QGroupBox {"
+        "  border: 1px solid #c8dde0;"
+        "  border-radius: 10px;"
+        "  margin-top: 10px;"
+        "  background-color: #f7fbfc;"
+        "  font-weight: 700;"
+        "}"
+        "QGroupBox::title {"
+        "  subcontrol-origin: margin;"
+        "  left: 12px;"
+        "  padding: 0 6px;"
+        "  color: #1f5861;"
+        "}"
+
+        "QTabWidget::pane {"
+        "  border: 1px solid #c8dde0;"
+        "  border-radius: 10px;"
+        "  background-color: #f7fbfc;"
+        "  top: -1px;"
+        "}"
+        "QTabBar::tab {"
+        "  background-color: #dfeff1;"
+        "  color: #365961;"
+        "  border: 1px solid #c2d9dd;"
+        "  border-bottom: none;"
+        "  border-top-left-radius: 8px;"
+        "  border-top-right-radius: 8px;"
+        "  padding: 8px 14px;"
+        "  min-width: 120px;"
+        "  font-weight: 600;"
+        "}"
+        "QTabBar::tab:selected {"
+        "  background-color: #f7fbfc;"
+        "  color: #0f3f47;"
+        "}"
+
+        "QTableWidget {"
+        "  background-color: #ffffff;"
+        "  border: 1px solid #c8dde0;"
+        "  border-radius: 10px;"
+        "  gridline-color: #e6eff1;"
+        "  alternate-background-color: #f5fafb;"
+        "}"
+        "QTableWidget::item { padding: 8px 6px; }"
+        "QTableWidget::item:selected { background-color: #d8eef2; color: #0d3138; }"
+        "QHeaderView::section {"
+        "  background-color: #2a7280;"
+        "  color: #ffffff;"
+        "  font-weight: 700;"
+        "  padding: 8px 6px;"
+        "  border: none;"
+        "  border-right: 1px solid #3c8592;"
+        "}"
+
+        "QLabel#totalValue { color: #197c89; font-size: 17px; font-weight: 800; }"
+        "QLineEdit#roleDisplay { background-color: #f4fbfc; border: 1px solid #b8d4d8; font-weight: 600; }"
     );
 
-    setWindowTitle("CSAT_BMTT - Personal Record Vault");
+    ui->employeeTable->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    ui->employeeTable->horizontalHeader()->setStretchLastSection(true);
+    ui->employeeTable->verticalHeader()->setVisible(false);
+
+    setWindowTitle("CSAT_BMTT - Clinical Record Center");
 }
 
 void MainWindow::loadProfileData() {
@@ -411,6 +578,10 @@ void MainWindow::loadProfileData() {
                 ui->doctorCreateGroup->setVisible(true);
                 resetDoctorCreateForm();
             }
+        } else if (isUserMode()) {
+            ui->employeeTable->setVisible(true);
+            ui->doctorCreateGroup->setVisible(false);
+            loadUserMedicalRecordList();
         } else {
             ui->employeeTable->setVisible(true);
             ui->doctorCreateGroup->setVisible(false);
@@ -703,9 +874,75 @@ void MainWindow::onSearch(const QString& searchText) {
 }
 
 void MainWindow::onViewMyInfo() {
-    if (!isAdminMode() && !isDoctorMode()) {
+    if (!isAdminMode() && !isDoctorMode() && !isUserMode()) {
         return;
     }
+
+    PersonalRecord previewRecord;
+    std::string error;
+    if (!networkClient->FetchProfile(previewRecord, error)) {
+        QMessageBox::critical(this, "Error", QString::fromStdString(error));
+        return;
+    }
+
+    const QString maskedInfo =
+        QString("Username: %1\n"
+                "Name: %2\n"
+                "Gender: %3\n"
+                "CCCD: %4\n"
+                "Phone: %5\n"
+                "Email: %6")
+            .arg(QString::fromStdString(previewRecord.username))
+            .arg(QString::fromStdString(previewRecord.name))
+            .arg(GenderToLabel(previewRecord.gender))
+            .arg(MaskKeepLast(previewRecord.cccd, 4))
+            .arg(MaskKeepLast(previewRecord.phone, 3))
+            .arg(MaskEmail(previewRecord.email));
+
+    QDialog previewDialog(this);
+    previewDialog.setWindowTitle("Thông tin cá nhân");
+    previewDialog.setModal(true);
+    previewDialog.setMinimumWidth(460);
+
+    QVBoxLayout* rootLayout = new QVBoxLayout(&previewDialog);
+
+    QLabel* maskedInfoLabel = new QLabel(maskedInfo, &previewDialog);
+    maskedInfoLabel->setWordWrap(true);
+    maskedInfoLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    maskedInfoLabel->setStyleSheet(
+        "QLabel { border: 1px solid #cfd8dc; border-radius: 6px; padding: 10px; background-color: #f8fafc; color: #263238; }");
+    rootLayout->addWidget(maskedInfoLabel);
+
+    QHBoxLayout* buttonLayout = new QHBoxLayout;
+    QPushButton* detailBtn = new QPushButton("Xem chi tiết", &previewDialog);
+    QPushButton* closeBtn = new QPushButton("Đóng", &previewDialog);
+    detailBtn->setMinimumWidth(150);
+    closeBtn->setMinimumWidth(150);
+    detailBtn->setStyleSheet(
+        "QPushButton { background-color: #00897b; color: white; font-weight: bold; padding: 6px 10px; border-radius: 4px; }"
+        "QPushButton:hover { background-color: #00695c; }"
+        "QPushButton:pressed { background-color: #004d40; }");
+    closeBtn->setStyleSheet(
+        "QPushButton { background-color: #546e7a; color: white; font-weight: bold; padding: 6px 10px; border-radius: 4px; }"
+        "QPushButton:hover { background-color: #455a64; }"
+        "QPushButton:pressed { background-color: #37474f; }");
+
+    buttonLayout->addWidget(detailBtn);
+    buttonLayout->addStretch();
+    buttonLayout->addWidget(closeBtn);
+    rootLayout->addLayout(buttonLayout);
+
+    connect(detailBtn, &QPushButton::clicked, &previewDialog, &QDialog::accept);
+    connect(closeBtn, &QPushButton::clicked, &previewDialog, &QDialog::reject);
+
+    if (previewDialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    openDetailedMyInfoFlow();
+}
+
+void MainWindow::openDetailedMyInfoFlow() {
 
     QString password;
     if (!promptPasswordForSensitiveAction("Xem thong tin cua toi", "Nhap lai mat khau de xac thuc:", password)) {
@@ -734,10 +971,16 @@ void MainWindow::onViewMyInfo() {
     }
 
     const EmployeeDialog::RecordData updated = dialog.getRecordData();
-    const QString effectivePassword = updated.password.isEmpty() ? password : updated.password;
+
+    QString currentPasswordForUpdate = password;
+    QString newPasswordForUpdate = password;
+    if (updated.changePassword) {
+        currentPasswordForUpdate = updated.currentPassword;
+        newPasswordForUpdate = updated.newPassword;
+    }
 
     EmployeeDialog::RecordData validated = updated;
-    validated.password = effectivePassword;
+    validated.password = newPasswordForUpdate;
 
     QString validationError;
     if (!ValidateRecordData(validated, validationError)) {
@@ -762,7 +1005,10 @@ void MainWindow::onViewMyInfo() {
         return;
     }
 
-    if (!networkClient->UpdateProfile(updatedRecord, effectivePassword.toStdString(), error)) {
+    if (!networkClient->UpdateProfile(updatedRecord,
+                                      newPasswordForUpdate.toStdString(),
+                                      error,
+                                      currentPasswordForUpdate.toStdString())) {
         QMessageBox::critical(this, "Update Failed", QString::fromStdString(error));
         return;
     }
@@ -856,11 +1102,14 @@ void MainWindow::onTableRowSelection() {
                 selectedUserId > 0 && selectedUsername.compare(currentUsername, Qt::CaseInsensitive) != 0;
             ui->editBtn->setEnabled(hasValidSelection);
             ui->deleteBtn->setEnabled(hasValidSelection);
-        } else if (isDoctorMode()) {
+        } else if (isDoctorMode() || isUserMode()) {
             ui->editBtn->setEnabled(false);
             ui->deleteBtn->setEnabled(false);
 
-            if (isDoctorListTabActive() && selectedRecordId > 0) {
+            const bool canOpenMedicalDetail =
+                selectedRecordId > 0 && ((isDoctorMode() && isDoctorListTabActive()) || isUserMode());
+
+            if (canOpenMedicalDetail) {
                 QString password;
                 if (!promptPasswordForSensitiveAction("Xem chi tiet benh an", "Nhap mat khau de giai ma benh an:", password)) {
                     return;
@@ -873,18 +1122,7 @@ void MainWindow::onTableRowSelection() {
                     return;
                 }
 
-                const QString detailText =
-                    QString("Medical ID: %1\nPatient ID: %2\nPatient Name: %3\nDoctor ID: %4\nVisit Date: %5\nDepartment: %6\nDiagnosis: %7\nPrescription: %8")
-                        .arg(detail.recordId)
-                        .arg(detail.patientId)
-                        .arg(QString::fromStdString(detail.patientName))
-                        .arg(detail.doctorId)
-                        .arg(QString::fromStdString(detail.visitDate))
-                        .arg(QString::fromStdString(detail.department))
-                        .arg(QString::fromStdString(detail.diagnosis))
-                        .arg(QString::fromStdString(detail.prescription));
-
-                QMessageBox::information(this, "Chi tiet benh an", detailText);
+                medical_record_dialog::ShowMedicalRecordDetailDialog(this, detail);
             }
         }
     } else if (isAdminMode()) {

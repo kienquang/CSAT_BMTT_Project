@@ -5,6 +5,7 @@
 
 namespace masking {
 
+// [GROUP: Public API]
 std::string masking_phone(const std::string& value);
 std::string masking_cccd(const std::string& value);
 std::string masking_email(const std::string& value);

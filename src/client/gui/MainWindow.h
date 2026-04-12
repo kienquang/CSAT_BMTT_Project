@@ -38,6 +38,7 @@ private slots:
 private:
     bool isAdminMode() const;
     bool isDoctorMode() const;
+    bool isUserMode() const;
     bool isAdminUsersTabActive() const;
     bool isDoctorListTabActive() const;
     bool isDoctorCreateTabActive() const;
@@ -45,9 +46,11 @@ private:
     void loadAdminUserList();
     void loadAdminMedicalRecordList();
     void loadDoctorMedicalRecordList();
+    void loadUserMedicalRecordList();
     void populateMedicalRecordTable(const std::vector<MedicalRecordListItem>& records);
     void loadNonAdminPlaceholder();
     void resetDoctorCreateForm();
+    void openDetailedMyInfoFlow();
     bool promptPasswordForSensitiveAction(const QString& title,
                                           const QString& prompt,
                                           QString& passwordOut) const;

@@ -5,6 +5,7 @@
 
 namespace Base64 {
 
+// [GROUP: Public API]
 std::string Encode(const std::string& input);
 bool Decode(const std::string& input, std::string& output);
 

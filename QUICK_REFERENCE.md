@@ -40,7 +40,6 @@ Set values in `.env`:
 - `APP_DB_USER`
 - `APP_DB_PASSWORD`
 - `APP_DB_NAME`
-- `APP_LOGIN_BLOWFISH_KEY`
 
 ## Default Bootstrap Account
 

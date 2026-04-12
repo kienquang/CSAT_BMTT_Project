@@ -1,4 +1,5 @@
 #include "PasswordHasher.h"
+#include "Base64.h"
 #include "SecureRandom.h"
 
 #include <algorithm>
@@ -16,6 +17,7 @@ using namespace std;
 
 namespace {
 
+// [GROUP: Argon2 Constants]
 constexpr uint32_t kTimeCost = 3;
 constexpr uint32_t kMemoryCostKiB = 1 << 16;
 constexpr uint32_t kParallelism = 1;
@@ -23,6 +25,14 @@ constexpr size_t kSaltLength = 16;
 constexpr size_t kHashLength = 32;
 constexpr size_t kKekLength = 32;
 
+struct Argon2EncodedParts {
+    uint32_t memoryCostKiB = 0;
+    uint32_t timeCost = 0;
+    uint32_t parallelism = 0;
+    string saltBytes;
+};
+
+// [GROUP: Internal Helpers]
 array<uint8_t, kSaltLength> GenerateSalt() {
     const vector<uint8_t> randomSalt = SecureRandom::RandomBytes(kSaltLength);
     array<uint8_t, kSaltLength> salt{};
@@ -30,22 +40,76 @@ array<uint8_t, kSaltLength> GenerateSalt() {
     return salt;
 }
 
-string BuildDerivationSalt(const string& username) {
-    string normalized = username;
-    for (char& ch : normalized) {
-        ch = static_cast<char>(tolower(static_cast<unsigned char>(ch)));
+// [GROUP: Internal Helpers]
+vector<string> Split(const string& value, char delimiter) {
+    vector<string> parts;
+    string current;
+    for (char ch : value) {
+        if (ch == delimiter) {
+            parts.push_back(current);
+            current.clear();
+            continue;
+        }
+        current.push_back(ch);
     }
-
-    string salt = "kek:" + normalized;
-    while (salt.size() < kSaltLength) {
-        salt += "#";
-        salt += normalized;
-    }
-
-    salt.resize(kSaltLength);
-    return salt;
+    parts.push_back(current);
+    return parts;
 }
 
+// [GROUP: Internal Helpers]
+string NormalizeBase64Padding(string encoded) {
+    while ((encoded.size() % 4) != 0) {
+        encoded.push_back('=');
+    }
+    return encoded;
+}
+
+// [GROUP: Internal Helpers]
+Argon2EncodedParts ParseArgon2EncodedHash(const string& encodedHash) {
+    const vector<string> sections = Split(encodedHash, '$');
+    if (sections.size() < 6) {
+        throw runtime_error("Encoded hash format is invalid");
+    }
+
+    // Expected format: $argon2id$v=19$m=...,t=...,p=...$<salt_b64>$<hash_b64>
+    if (sections[1] != "argon2id") {
+        throw runtime_error("Only argon2id hashes are supported for KEK derivation");
+    }
+
+    const string& paramsSection = sections[3];
+    const vector<string> params = Split(paramsSection, ',');
+
+    Argon2EncodedParts parts;
+    for (const string& param : params) {
+        const size_t equalsPos = param.find('=');
+        if (equalsPos == string::npos || equalsPos == 0 || equalsPos == param.size() - 1) {
+            continue;
+        }
+
+        const string key = param.substr(0, equalsPos);
+        const string value = param.substr(equalsPos + 1);
+        if (key == "m") {
+            parts.memoryCostKiB = static_cast<uint32_t>(stoul(value));
+        } else if (key == "t") {
+            parts.timeCost = static_cast<uint32_t>(stoul(value));
+        } else if (key == "p") {
+            parts.parallelism = static_cast<uint32_t>(stoul(value));
+        }
+    }
+
+    if (parts.memoryCostKiB == 0 || parts.timeCost == 0 || parts.parallelism == 0) {
+        throw runtime_error("Encoded hash does not contain valid Argon2 parameters");
+    }
+
+    const string saltBase64 = NormalizeBase64Padding(sections[4]);
+    if (!Base64::Decode(saltBase64, parts.saltBytes) || parts.saltBytes.empty()) {
+        throw runtime_error("Failed to decode Argon2 salt");
+    }
+
+    return parts;
+}
+
+// [GROUP: Internal Helpers]
 string BytesToHex(const uint8_t* data, size_t length) {
     stringstream stream;
     stream << hex << setfill('0');
@@ -59,6 +123,7 @@ string BytesToHex(const uint8_t* data, size_t length) {
 
 namespace PasswordHasher {
 
+// [GROUP: Public API]
 string HashPassword(const string& passwordPlaintext) {
     if (passwordPlaintext.empty()) {
         throw runtime_error("Password must not be empty");
@@ -91,6 +156,7 @@ string HashPassword(const string& passwordPlaintext) {
     return string(encoded.data());
 }
 
+// [GROUP: Public API]
 bool VerifyPassword(const string& passwordPlaintext, const string& encodedHash) {
     if (passwordPlaintext.empty() || encodedHash.empty()) {
         return false;
@@ -104,26 +170,27 @@ bool VerifyPassword(const string& passwordPlaintext, const string& encodedHash) 
     return rc == ARGON2_OK;
 }
 
-string DeriveKeyEncryptionKey(const string& passwordPlaintext, const string& username) {
+// [GROUP: Public API]
+string DeriveKeyEncryptionKey(const string& passwordPlaintext, const string& encodedHash) {
     if (passwordPlaintext.empty()) {
         throw runtime_error("Password must not be empty for KEK derivation");
     }
 
-    if (username.empty()) {
-        throw runtime_error("Username must not be empty for KEK derivation");
+    if (encodedHash.empty()) {
+        throw runtime_error("Encoded hash must not be empty for KEK derivation");
     }
 
-    const string salt = BuildDerivationSalt(username);
+    const Argon2EncodedParts parsed = ParseArgon2EncodedHash(encodedHash);
     array<uint8_t, kKekLength> rawKey{};
 
     const int rc = argon2id_hash_raw(
-        kTimeCost,
-        kMemoryCostKiB,
-        kParallelism,
+        parsed.timeCost,
+        parsed.memoryCostKiB,
+        parsed.parallelism,
         passwordPlaintext.data(),
         passwordPlaintext.size(),
-        salt.data(),
-        salt.size(),
+        parsed.saltBytes.data(),
+        parsed.saltBytes.size(),
         rawKey.data(),
         rawKey.size());
 

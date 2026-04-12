@@ -61,10 +61,6 @@ Check `.env` values for:
 - `APP_DB_PASSWORD`
 - `APP_DB_NAME`
 
-### Login request failed
-
-Check both client and server can read the same `APP_LOGIN_BLOWFISH_KEY`.
-
 ### GUI opens but login fails
 
 Start the server first. On an empty database the server bootstraps:

@@ -5,9 +5,10 @@
 
 namespace PasswordHasher {
 
+// [GROUP: Public API]
 std::string HashPassword(const std::string& passwordPlaintext);
 bool VerifyPassword(const std::string& passwordPlaintext, const std::string& encodedHash);
-std::string DeriveKeyEncryptionKey(const std::string& passwordPlaintext, const std::string& username);
+std::string DeriveKeyEncryptionKey(const std::string& passwordPlaintext, const std::string& encodedHash);
 
 }  // namespace PasswordHasher
 

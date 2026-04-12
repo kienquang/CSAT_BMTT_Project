@@ -7,6 +7,7 @@
 
 namespace SecureRandom {
 
+// [GROUP: Public API]
 bool Fill(uint8_t* buffer, size_t length);
 std::vector<uint8_t> RandomBytes(size_t length);
 

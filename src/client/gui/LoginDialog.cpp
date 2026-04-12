@@ -8,6 +8,7 @@
 #include <QLabel>
 #include <QMessageBox>
 #include <QVBoxLayout>
+#include <QFont>
 
 namespace {
 
@@ -86,12 +87,16 @@ LoginDialog::~LoginDialog() {
 }
 
 void LoginDialog::setupUi() {
+    setFont(QFont("Segoe UI", 10));
+
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
+    mainLayout->setContentsMargins(22, 22, 22, 22);
+    mainLayout->setSpacing(10);
 
     QLabel* titleLabel = new QLabel("CSAT_BMTT Personal Record Vault");
-    titleLabel->setStyleSheet("font-size: 14px; font-weight: bold; color: #34495e;");
+    titleLabel->setObjectName("loginTitleLabel");
     mainLayout->addWidget(titleLabel);
-    mainLayout->addSpacing(20);
+    mainLayout->addSpacing(8);
 
     mainLayout->addWidget(new QLabel("Username:"));
     usernameEdit = new QLineEdit;
@@ -110,6 +115,9 @@ void LoginDialog::setupUi() {
     loginBtn = new QPushButton("Login");
     registerBtn = new QPushButton("Register");
     cancelBtn = new QPushButton("Exit");
+    loginBtn->setObjectName("loginBtn");
+    registerBtn->setObjectName("registerBtn");
+    cancelBtn->setObjectName("exitBtn");
     loginBtn->setMinimumHeight(35);
     registerBtn->setMinimumHeight(35);
     cancelBtn->setMinimumHeight(35);
@@ -119,6 +127,20 @@ void LoginDialog::setupUi() {
     mainLayout->addLayout(buttonLayout);
 
     setLayout(mainLayout);
+
+    setStyleSheet(
+        "QDialog { background-color: #eef7f8; color: #17363e; }"
+        "QLabel { color: #2d4a53; font-weight: 600; }"
+        "QLabel#loginTitleLabel { color: #0f3f47; font-size: 20px; font-weight: 800; }"
+        "QLineEdit { background-color: #ffffff; border: 1px solid #bad6db; border-radius: 8px; padding: 8px 10px; }"
+        "QLineEdit:focus { border: 1px solid #1f8b99; }"
+        "QPushButton { border: none; border-radius: 8px; padding: 8px 12px; color: white; font-weight: 700; }"
+        "QPushButton#loginBtn { background-color: #1f8b99; }"
+        "QPushButton#loginBtn:hover { background-color: #1b7884; }"
+        "QPushButton#registerBtn { background-color: #2d9d6f; }"
+        "QPushButton#registerBtn:hover { background-color: #26855e; }"
+        "QPushButton#exitBtn { background-color: #c95c54; }"
+        "QPushButton#exitBtn:hover { background-color: #b15049; }");
 
     connect(loginBtn, &QPushButton::clicked, this, &LoginDialog::onLoginClicked);
     connect(registerBtn, &QPushButton::clicked, this, &LoginDialog::onRegisterClicked);

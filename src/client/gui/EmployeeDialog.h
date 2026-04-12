@@ -19,6 +19,9 @@ public:
         QString phone;
         QString email;
         QString password;
+        QString currentPassword;
+        QString newPassword;
+        bool changePassword = false;
     };
 
     enum Mode {
@@ -35,6 +38,7 @@ public:
 private:
     void setupUi();
     void connectSignals();
+    void onChangePasswordClicked();
 
     Mode mode;
     bool showPasswordField;
@@ -47,6 +51,11 @@ private:
     QLineEdit* emailEdit;
     QLabel* passwordLabel;
     QLineEdit* passwordEdit;
+    QPushButton* changePasswordBtn;
+
+    QString pendingCurrentPassword;
+    QString pendingNewPassword;
+    bool changePasswordRequested;
 
     QPushButton* saveBtn;
     QPushButton* cancelBtn;
