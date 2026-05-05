@@ -109,14 +109,14 @@ bool DecryptAdminEmployeePayload(const PacketData& packet, nhanvien& employee, s
         return false;
     }
 
-    const string adminKey = EnvConfig::GetString("APP_LOGIN_BLOWFISH_KEY");
-    if (adminKey.empty()) {
+    const string Key = EnvConfig::GetString("APP_LOGIN_BLOWFISH_KEY");
+    if (Key.empty()) {
         error = "Missing APP_LOGIN_BLOWFISH_KEY in client .env";
         return false;
     }
 
     const string encrypted = ReadLoginCiphertext(packet);
-    Blowfish cipher(adminKey);
+    Blowfish cipher(Key);
     const string plain = cipher.DecryptString(encrypted);
 
     // Parse delimited payload: name|role|cccd|phone|password|salary
@@ -166,7 +166,7 @@ bool NetworkClient::Connect(const string& host, int port, string& error) {
         error = "WSAStartup failed";
         return false;
     }
-
+    cout << "wsaData.wVersion:" << wsaData.wVersion << endl;
     SOCKET socketHandle = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (socketHandle == INVALID_SOCKET) {
         error = "Failed to create socket";
@@ -344,7 +344,6 @@ bool NetworkClient::FetchAllEmployees(vector<nhanvien>& employees, string& error
                 return false;
             }
             emp.id = employeePacket.employeeId;
-            // Hiển thị password đã giải mã cho Admin (UI đọc từ matkhau_cipher)
             emp.matkhau_cipher = passwordPlain;
             employees.push_back(emp);
         } else {

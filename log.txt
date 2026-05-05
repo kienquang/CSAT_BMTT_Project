@@ -1,0 +1,7 @@
+========================================
+  CSAT_BMTT - Employee Management System
+  Version: 1.0 (Qt6.x)
+  Role-Based Data Masking Enabled
+========================================
+wsaData.wVersion:514
+[INFO] User cancelled login

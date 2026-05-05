@@ -160,7 +160,7 @@ endif()
 
 # ======== QT GUI APPLICATION ========
 if(BUILD_QT_GUI)
-    add_executable(CSATApp WIN32
+    add_executable(CSATApp #WIN32
         ${CMAKE_SOURCE_DIR}/src/client/main_qt.cpp
     )
 
