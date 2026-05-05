@@ -4,6 +4,8 @@ set(UI_SOURCES
     MainWindow.cpp
     MainWindow.h
     MainWindow.ui
+    MedicalRecordDetailDialog.cpp
+    MedicalRecordDetailDialog.h
     EmployeeDialog.cpp
     EmployeeDialog.h
     LoginDialog.cpp

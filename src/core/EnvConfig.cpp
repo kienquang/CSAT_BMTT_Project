@@ -11,9 +11,11 @@ using namespace std;
 
 namespace {
 
+// [GROUP: Cached .env State]
 unordered_map<string, string> g_envValues;
 once_flag g_loadFlag;
 
+// [GROUP: Parse Helpers]
 string Trim(const string& value) {
     const size_t start = value.find_first_not_of(" \t\r\n");
     if (start == string::npos) {
@@ -24,6 +26,7 @@ string Trim(const string& value) {
     return value.substr(start, end - start + 1);
 }
 
+// [GROUP: Parse Helpers]
 string StripQuotes(const string& value) {
     if (value.size() >= 2) {
         const char first = value.front();
@@ -35,6 +38,7 @@ string StripQuotes(const string& value) {
     return value;
 }
 
+// [GROUP: File Discovery]
 filesystem::path FindEnvFile() {
     filesystem::path current = filesystem::current_path();
     for (int depth = 0; depth < 8; ++depth) {
@@ -52,6 +56,7 @@ filesystem::path FindEnvFile() {
     return {};
 }
 
+// [GROUP: File Load]
 void LoadEnvFile() {
     const filesystem::path envPath = FindEnvFile();
     if (envPath.empty()) {
@@ -79,6 +84,7 @@ void LoadEnvFile() {
     }
 }
 
+// [GROUP: Cached Lookup]
 const string& GetLoadedValue(const string& key) {
     call_once(g_loadFlag, LoadEnvFile);
     static const string kEmpty;
@@ -91,8 +97,9 @@ const string& GetLoadedValue(const string& key) {
     return it->second;
 }
 
-} // namespace
+}  // namespace
 
+// [GROUP: Public API]
 string EnvConfig::GetString(const string& key, const string& defaultValue) {
     const char* processValue = getenv(key.c_str());
     if (processValue != nullptr && processValue[0] != '\0') {
@@ -107,6 +114,7 @@ string EnvConfig::GetString(const string& key, const string& defaultValue) {
     return defaultValue;
 }
 
+// [GROUP: Public API]
 int EnvConfig::GetInt(const string& key, int defaultValue) {
     const string value = GetString(key);
     if (value.empty()) {

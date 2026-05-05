@@ -1,13 +1,16 @@
 #include <iostream>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h>
 
 #include <cstring>
 #include <string>
+#include <thread>
 
-#include "../core/Blowfish.h"
 #include "../core/DatabaseHelper.h"
 #include "../core/EnvConfig.h"
+#include "../core/masking.h"
+#include "../core/TlsSocket.h"
 #include "../shared/NetworkData.h"
 
 #pragma comment(lib, "ws2_32.lib")
@@ -18,6 +21,7 @@ namespace {
 
 constexpr int kBacklog = 5;
 
+// [GROUP: Packet Field Helpers]
 template <size_t N>
 void CopyToBuffer(char (&dest)[N], const string& value) {
     memset(dest, 0, N);
@@ -26,376 +30,69 @@ void CopyToBuffer(char (&dest)[N], const string& value) {
     }
 }
 
+// [GROUP: Secure Memory Cleanup]
+void SecureWipeString(string& value) {
+    if (value.capacity() > 0) {
+        RtlSecureZeroMemory(value.data(), value.capacity());
+    }
+    value.clear();
+    value.shrink_to_fit();
+}
+
+// [GROUP: Packet Initialization And Transport Wrappers]
 void InitializePacket(PacketData& packet) {
     memset(&packet, 0, sizeof(PacketData));
     packet.protocolVersion = PROTOCOL_VERSION;
     packet.status = STATUS_ERROR;
 }
 
-int RoleStringToInt(const string& role) {
-    return role == "Admin" ? ROLE_ADMIN : ROLE_USER;
+bool SendAll(TlsSocket& tlsSocket, const char* data, int totalBytes) {
+    return tlsSocket.SendAll(data, totalBytes);
 }
 
-bool SendAll(SOCKET socket, const char* data, int totalBytes) {
-    int sentBytes = 0;
-    while (sentBytes < totalBytes) {
-        const int sent = send(socket, data + sentBytes, totalBytes - sentBytes, 0);
-        if (sent == SOCKET_ERROR) {
-            return false;
-        }
-        sentBytes += sent;
-    }
-    return true;
+bool RecvAll(TlsSocket& tlsSocket, char* data, int totalBytes) {
+    return tlsSocket.RecvAll(data, totalBytes);
 }
 
-bool RecvAll(SOCKET socket, char* data, int totalBytes) {
-    int receivedBytes = 0;
-    while (receivedBytes < totalBytes) {
-        const int received = recv(socket, data + receivedBytes, totalBytes - receivedBytes, 0);
-        if (received <= 0) {
-            return false;
-        }
-        receivedBytes += received;
-    }
-    return true;
+// [GROUP: Request/Response Mapping Helpers]
+PersonalRecord PacketToRecord(const PacketData& request) {
+    PersonalRecord record;
+    record.userId = request.userId;
+    record.recordId = request.recordId;
+    record.username = request.username;
+    record.name = request.name;
+    record.role = request.role;
+    record.gender = request.gender;
+    record.cccd = request.cccd;
+    record.phone = request.phone;
+    record.email = request.email;
+    record.encryptedDek = request.encryptedDek;
+    return record;
 }
 
-bool DecryptLoginPayload(const PacketData& request, string& cccd, string& password, string& error) {
-    if (request.dataType != DATATYPE_LOGIN_BLOWFISH) {
-        error = "Login request must use Blowfish-encrypted payload.";
-        return false;
-    }
-
-    const string loginKey = EnvConfig::GetString("APP_LOGIN_BLOWFISH_KEY");
-    if (loginKey.empty()) {
-        error = "Server is missing APP_LOGIN_BLOWFISH_KEY";
-        return false;
-    }
-
-    const string encryptedPayload = ReadLoginCiphertext(request);
-    if (encryptedPayload.empty()) {
-        error = "Encrypted login payload is empty";
-        return false;
-    }
-
-    Blowfish cipher(loginKey);
-    const string plainPayload = cipher.DecryptString(encryptedPayload);
-    if (plainPayload.size() < 12) {
-        error = "Encrypted login payload is invalid";
-        return false;
-    }
-
-    cccd = plainPayload.substr(0, 12);
-    password = plainPayload.substr(12);
-    return true;
+void RecordToPacket(const PersonalRecord& record, PacketData& response) {
+    response.userId = record.userId;
+    response.recordId = record.recordId;
+    response.role = record.role;
+    response.gender = record.gender;
+    CopyToBuffer(response.username, record.username);
+    CopyToBuffer(response.name, record.name);
+    CopyToBuffer(response.cccd, record.cccd);
+    CopyToBuffer(response.phone, record.phone);
+    CopyToBuffer(response.email, record.email);
+    CopyToBuffer(response.encryptedDek, record.encryptedDek);
 }
 
-string SerializeEmployeePlaintext(const nhanvien& employee, const string& passwordPlain) {
-    return employee.ten_nv + "|" + employee.vai_tro + "|" + employee.cccd_cipher + "|" +
-           employee.sdt_cipher + "|" + passwordPlain + "|" + employee.luong_cipher;
-}
-
-bool EncryptAdminEmployeePayload(const nhanvien& employee, const string& passwordPlain,
-                                 PacketData& packet, string& error) {
-    const string adminKey = EnvConfig::GetString("APP_LOGIN_BLOWFISH_KEY");
-    if (adminKey.empty()) {
-        error = "Server missing APP_LOGIN_BLOWFISH_KEY";
-        return false;
-    }
-
-    const string plain = SerializeEmployeePlaintext(employee, passwordPlain);
-    Blowfish cipher(adminKey);
-    const string encrypted = cipher.EncryptString(plain);
-
-    if (!WriteLoginCiphertext(packet, encrypted)) {
-        error = "Encrypted admin payload exceeds packet capacity";
-        return false;
-    }
-
-    packet.dataType = DATATYPE_ADMIN_BLOWFISH;
-    return true;
-}
-
-bool DecryptAdminEmployeePayload(const PacketData& request,
-                                 nhanvien& employee,
-                                 string& passwordPlain,
-                                 string& error) {
-    if (request.dataType != DATATYPE_ADMIN_BLOWFISH) {
-        error = "Request is not admin-encrypted payload";
-        return false;
-    }
-
-    const string adminKey = EnvConfig::GetString("APP_LOGIN_BLOWFISH_KEY");
-    if (adminKey.empty()) {
-        error = "Server missing APP_LOGIN_BLOWFISH_KEY";
-        return false;
-    }
-
-    const string encrypted = ReadLoginCiphertext(request);
-    Blowfish cipher(adminKey);
-    const string plain = cipher.DecryptString(encrypted);
-
-    size_t pos = 0, prev = 0;
-    string parts[6];
-    int idx = 0;
-    while ((pos = plain.find('|', prev)) != string::npos && idx < 5) {
-        parts[idx++] = plain.substr(prev, pos - prev);
-        prev = pos + 1;
-    }
-    parts[idx++] = plain.substr(prev);
-
-    if (idx != 6) {
-        error = "Malformed admin payload";
-        return false;
-    }
-
-    employee.ten_nv = parts[0];
-    employee.vai_tro = parts[1];
-    employee.cccd_cipher = parts[2];
-    employee.sdt_cipher = parts[3];
-    passwordPlain = parts[4];
-    employee.luong_cipher = parts[5];
-    return true;
-}
-
-PacketData HandleLogin(DatabaseHelper& dbHelper, const PacketData& request,
-                       bool& isAuthenticated, int& sessionRole, int& sessionUserId) {
-    PacketData response;
-    InitializePacket(response);
-    response.requestType = request.requestType;
-
-    string cccdPlaintext;
-    string passwordPlaintext;
-    string decryptError;
-    if (!DecryptLoginPayload(request, cccdPlaintext, passwordPlaintext, decryptError)) {
-        response.status = STATUS_ERROR;
-        CopyToBuffer(response.message, decryptError);
-        return response;
-    }
-
-    nhanvien user = dbHelper.AuthenticateUser(cccdPlaintext, passwordPlaintext);
-    if (user.id == -1) {
-        response.status = STATUS_UNAUTHORIZED;
-        CopyToBuffer(response.message, "Dang nhap that bai. CCCD hoac mat khau sai.");
-        return response;
-    }
-
-    isAuthenticated = true;
-    sessionRole = RoleStringToInt(user.vai_tro);
-    sessionUserId = user.id;
-
-    response.status = STATUS_SUCCESS;
-    response.userRole = sessionRole;
-    response.employeeId = sessionUserId;
-    response.dataType = DATATYPE_PLAINTEXT;
-    CopyToBuffer(response.employeeName, user.ten_nv);
-    CopyToBuffer(response.employeeRole, user.vai_tro);
-    CopyToBuffer(response.message, "Dang nhap thanh cong.");
-
-    return response;
-}
-
-bool IsAdminSession(bool isAuthenticated, int sessionRole) {
-    return isAuthenticated && sessionRole == ROLE_ADMIN;
-}
-
-PacketData HandleMutationDenied(int requestType, const string& message) {
-    PacketData response;
-    InitializePacket(response);
-    response.requestType = requestType;
-    response.status = STATUS_UNAUTHORIZED;
-    CopyToBuffer(response.message, message);
-    return response;
-}
-
-PacketData HandleAddEmployee(DatabaseHelper& dbHelper, const PacketData& request,
-                             bool isAuthenticated, int sessionRole) {
-    if (!IsAdminSession(isAuthenticated, sessionRole)) {
-        return HandleMutationDenied(request.requestType, "Chi Admin moi duoc them nhan vien.");
-    }
-
-    PacketData response;
-    InitializePacket(response);
-    response.requestType = request.requestType;
-    nhanvien employeePayload{};
-    string passwordPlain;
-
-    if (request.dataType == DATATYPE_ADMIN_BLOWFISH) {
-        string decryptError;
-        if (!DecryptAdminEmployeePayload(request, employeePayload, passwordPlain, decryptError)) {
-            response.status = STATUS_ERROR;
-            CopyToBuffer(response.message, decryptError);
-            return response;
-        }
-    } else {
-        employeePayload.ten_nv = request.employeeName;
-        employeePayload.vai_tro = request.employeeRole;
-        employeePayload.cccd_cipher = request.cccd;
-        employeePayload.sdt_cipher = request.phone;
-        passwordPlain = request.password;
-        employeePayload.luong_cipher = request.salary;
-    }
-
-    const bool inserted = dbHelper.InsertNhanVien(
-        employeePayload.ten_nv,
-        employeePayload.vai_tro,
-        employeePayload.cccd_cipher,
-        employeePayload.sdt_cipher,
-        passwordPlain,
-        employeePayload.luong_cipher
-    );
-
-    response.status = inserted ? STATUS_SUCCESS : STATUS_ERROR;
-    CopyToBuffer(response.message, inserted ? "Them nhan vien thanh cong." : "Them nhan vien that bai.");
-    return response;
-}
-
-PacketData HandleUpdateEmployee(DatabaseHelper& dbHelper, const PacketData& request,
-                                bool isAuthenticated, int sessionRole) {
-    if (!IsAdminSession(isAuthenticated, sessionRole)) {
-        return HandleMutationDenied(request.requestType, "Chi Admin moi duoc cap nhat nhan vien.");
-    }
-
-    PacketData response;
-    InitializePacket(response);
-    response.requestType = request.requestType;
-
-    nhanvien employeePayload{};
-    string passwordPlain;
-
-    if (request.dataType == DATATYPE_ADMIN_BLOWFISH) {
-        string decryptError;
-        if (!DecryptAdminEmployeePayload(request, employeePayload, passwordPlain, decryptError)) {
-            response.status = STATUS_ERROR;
-            CopyToBuffer(response.message, decryptError);
-            return response;
-        }
-    } else {
-        employeePayload.ten_nv = request.employeeName;
-        employeePayload.vai_tro = request.employeeRole;
-        employeePayload.cccd_cipher = request.cccd;
-        employeePayload.sdt_cipher = request.phone;
-        passwordPlain = request.password;
-        employeePayload.luong_cipher = request.salary;
-    }
-
-    const bool updated = dbHelper.UpdateNhanVien(
-        request.employeeId,
-        employeePayload.ten_nv,
-        employeePayload.vai_tro,
-        employeePayload.cccd_cipher,
-        employeePayload.sdt_cipher,
-        passwordPlain,
-        employeePayload.luong_cipher
-    );
-
-    response.status = updated ? STATUS_SUCCESS : STATUS_ERROR;
-    CopyToBuffer(response.message, updated ? "Cap nhat nhan vien thanh cong." : "Cap nhat nhan vien that bai.");
-    return response;
-}
-
-PacketData HandleDeleteEmployee(DatabaseHelper& dbHelper, const PacketData& request,
-                                bool isAuthenticated, int sessionRole) {
-    if (!IsAdminSession(isAuthenticated, sessionRole)) {
-        return HandleMutationDenied(request.requestType, "Chi Admin moi duoc xoa nhan vien.");
-    }
-
-    PacketData response;
-    InitializePacket(response);
-    response.requestType = request.requestType;
-
-    const bool deleted = dbHelper.DeleteNhanVienById(request.employeeId);
-    response.status = deleted ? STATUS_SUCCESS : STATUS_ERROR;
-    CopyToBuffer(response.message, deleted ? "Xoa nhan vien thanh cong." : "Xoa nhan vien that bai.");
-    return response;
-}
-
-PacketData HandleGetTotal(DatabaseHelper& dbHelper, bool isAuthenticated) {
-    PacketData response;
-    InitializePacket(response);
-    response.requestType = REQ_GET_TOTAL;
-
-    if (!isAuthenticated) {
-        response.status = STATUS_UNAUTHORIZED;
-        CopyToBuffer(response.message, "Ban can dang nhap truoc khi truy van.");
-        return response;
-    }
-
-    response.status = STATUS_SUCCESS;
-    response.recordCount = dbHelper.GetTotalNhanVien();
-    CopyToBuffer(response.message, "Lay tong so nhan vien thanh cong.");
-    return response;
-}
-
-bool SendEmployeeListResponse(SOCKET clientSocket, DatabaseHelper& dbHelper,
-                              bool isAuthenticated, int sessionRole, string& error) {
-    PacketData header;
-    InitializePacket(header);
-    header.requestType = REQ_LIST_EMPLOYEES;
-
-    if (!isAuthenticated) {
-        header.status = STATUS_UNAUTHORIZED;
-        CopyToBuffer(header.message, "Ban can dang nhap truoc khi truy van.");
-        return SendAll(clientSocket, reinterpret_cast<const char*>(&header), sizeof(PacketData));
-    }
-
-    const int responseDataType = sessionRole == ROLE_USER ? DATATYPE_MASKED : DATATYPE_ADMIN_BLOWFISH;
-    vector<nhanvien> employees = dbHelper.GetAllNhanVienForClient(sessionRole);
-    header.status = STATUS_SUCCESS;
-    header.userRole = sessionRole;
-    header.dataType = responseDataType;
-    header.recordCount = static_cast<int>(employees.size());
-    CopyToBuffer(header.message, "Lay danh sach nhan vien thanh cong.");
-
-    if (!SendAll(clientSocket, reinterpret_cast<const char*>(&header), sizeof(PacketData))) {
-        error = "Failed to send employee list header";
-        return false;
-    }
-
-    for (const auto& employee : employees) {
-        PacketData item;
-        InitializePacket(item);
-        item.requestType = REQ_LIST_EMPLOYEES;
-        item.status = STATUS_SUCCESS;
-        item.userRole = sessionRole;
-        item.employeeId = employee.id;
-        item.dataType = responseDataType;
-
-        if (responseDataType == DATATYPE_ADMIN_BLOWFISH) {
-            string encErr;
-            if (!EncryptAdminEmployeePayload(employee, employee.matkhau_cipher, item, encErr)) {
-                error = encErr;
-                return false;
-            }
-        } else {
-            CopyToBuffer(item.employeeName, employee.ten_nv);
-            CopyToBuffer(item.employeeRole, employee.vai_tro);
-            CopyToBuffer(item.cccd, employee.cccd_cipher);
-            CopyToBuffer(item.phone, employee.sdt_cipher);
-            CopyToBuffer(item.salary, employee.luong_cipher);
-            CopyToBuffer(item.passwordMasked, employee.matkhau_cipher);
-        }
-
-        if (!SendAll(clientSocket, reinterpret_cast<const char*>(&item), sizeof(PacketData))) {
-            error = "Failed to send employee list item";
-            return false;
-        }
-    }
-
-    return true;
-}
-
-PacketData HandleLogout(bool& isAuthenticated, int& sessionRole, int& sessionUserId) {
-    PacketData response;
-    InitializePacket(response);
-    response.requestType = REQ_LOGOUT;
-    response.status = STATUS_SUCCESS;
-    CopyToBuffer(response.message, "Da dang xuat.");
-
-    isAuthenticated = false;
-    sessionRole = ROLE_USER;
-    sessionUserId = -1;
-    return response;
+void MedicalSummaryToPacket(const MedicalRecordSummary& record, PacketData& response) {
+    response.recordId = record.recordId;
+    response.userId = record.patientId;
+    response.role = record.doctorId;
+    CopyToBuffer(response.username, record.visitDate);
+    CopyToBuffer(response.name, record.patientName);
+    CopyToBuffer(response.cccd, record.department);
+    CopyToBuffer(response.phone, record.diagnosisCipher);
+    CopyToBuffer(response.email, record.prescriptionCipher);
+    CopyToBuffer(response.encryptedDek, record.doctorName);
 }
 
 PacketData BuildProtocolErrorResponse(const PacketData& request, const string& message) {
@@ -407,7 +104,793 @@ PacketData BuildProtocolErrorResponse(const PacketData& request, const string& m
     return response;
 }
 
-} // namespace
+PacketData BuildUnauthorizedResponse(int requestType, const string& message) {
+    PacketData response;
+    InitializePacket(response);
+    response.requestType = requestType;
+    response.status = STATUS_UNAUTHORIZED;
+    CopyToBuffer(response.message, message);
+    return response;
+}
+
+// [GROUP: HandleRequest/Auth]
+
+PacketData HandleLogin(DatabaseHelper& dbHelper, const PacketData& request,
+                       bool& isAuthenticated, int& sessionUserId,
+                       int& sessionRole, string& sessionUsername, string& sessionKek) {
+    PacketData response;
+    InitializePacket(response);
+    response.requestType = request.requestType;
+
+    const string username = request.username;
+    string password = request.password;
+    if (username.empty() || password.empty()) {
+        SecureWipeString(password);
+        response.status = STATUS_ERROR;
+        CopyToBuffer(response.message, "Username and password are required.");
+        return response;
+    }
+
+    string derivedSessionKek;
+    AuthenticatedUser user = dbHelper.AuthenticateUser(username, password, derivedSessionKek);
+    SecureWipeString(password);
+    if (!user.IsValid()) {
+        response.status = STATUS_UNAUTHORIZED;
+        CopyToBuffer(response.message, "Login failed. Username or password is incorrect.");
+        return response;
+    }
+
+    isAuthenticated = true;
+    sessionUserId = user.id;
+    sessionRole = user.role;
+    sessionUsername = user.username;
+    sessionKek = derivedSessionKek;
+
+    response.status = STATUS_SUCCESS;
+    response.userId = user.id;
+    response.role = user.role;
+    CopyToBuffer(response.username, user.username);
+    CopyToBuffer(response.message, "Login successful.");
+    return response;
+}
+
+// [GROUP: HandleRequest/Profile]
+
+PacketData HandleFetchProfile(DatabaseHelper& dbHelper, bool isAuthenticated,
+                              int sessionUserId, const string& sessionKek) {
+    PacketData response;
+    InitializePacket(response);
+    response.requestType = REQ_FETCH_PROFILE;
+
+    if (!isAuthenticated) {
+        response = BuildUnauthorizedResponse(REQ_FETCH_PROFILE, "Please login first.");
+        return response;
+    }
+
+    PersonalRecord record;
+    if (!dbHelper.GetPersonalRecordForUser(sessionUserId, sessionKek, record)) {
+        response.status = STATUS_NOTFOUND;
+        CopyToBuffer(response.message, "Profile record was not found.");
+        return response;
+    }
+
+    response.status = STATUS_SUCCESS;
+    response.dataType = DATATYPE_PLAINTEXT;
+    RecordToPacket(record, response);
+    CopyToBuffer(response.message, "Profile loaded successfully.");
+    return response;
+}
+
+PacketData HandleRegister(DatabaseHelper& dbHelper, const PacketData& request, bool isAuthenticated) {
+    PacketData response;
+    InitializePacket(response);
+    response.requestType = request.requestType;
+
+    if (isAuthenticated) {
+        response.status = STATUS_ERROR;
+        CopyToBuffer(response.message, "Logout before registering a new account.");
+        return response;
+    }
+
+    const PersonalRecord record = PacketToRecord(request);
+    const bool created = dbHelper.RegisterUser(
+        record.username,
+        record.name,
+        request.password,
+        record.gender,
+        record.cccd,
+        record.phone,
+        record.email);
+
+    response.status = created ? STATUS_SUCCESS : STATUS_ERROR;
+    CopyToBuffer(response.message, created ? "Registration successful." : "Registration failed.");
+    return response;
+}
+
+PacketData HandleUpdateProfile(DatabaseHelper& dbHelper, const PacketData& request,
+                               bool isAuthenticated, int sessionUserId,
+                               string& sessionUsername, string& sessionKek) {
+    PacketData response;
+    InitializePacket(response);
+    response.requestType = request.requestType;
+
+    if (!isAuthenticated) {
+        return BuildUnauthorizedResponse(request.requestType, "Please login first.");
+    }
+
+    const PersonalRecord record = PacketToRecord(request);
+    const bool updatePassword = request.password[0] != '\0';
+
+    string sourceKek = sessionKek;
+    if (updatePassword) {
+        string currentPassword = request.message;
+        if (!currentPassword.empty()) {
+            string derivedCurrentKek;
+            AuthenticatedUser verified = dbHelper.AuthenticateUser(sessionUsername, currentPassword, derivedCurrentKek);
+            SecureWipeString(currentPassword);
+
+            if (!verified.IsValid() || verified.id != sessionUserId) {
+                SecureWipeString(derivedCurrentKek);
+                return BuildUnauthorizedResponse(request.requestType, "Current password is incorrect.");
+            }
+
+            sourceKek = derivedCurrentKek;
+        }
+    }
+
+    string updatedSessionKek;
+    const bool updated = dbHelper.UpdatePersonalRecordForUser(
+        sessionUserId,
+        sourceKek,
+        record.username,
+        record.name,
+        request.password,
+        updatePassword,
+        record.gender,
+        record.cccd,
+        record.phone,
+        record.email,
+        updatedSessionKek);
+    SecureWipeString(sourceKek);
+
+    response.status = updated ? STATUS_SUCCESS : STATUS_ERROR;
+    if (updated) {
+        sessionUsername = record.username;
+        if (!updatedSessionKek.empty()) {
+            sessionKek = updatedSessionKek;
+        }
+        response.userId = sessionUserId;
+        CopyToBuffer(response.username, sessionUsername);
+        CopyToBuffer(response.name, record.name);
+        CopyToBuffer(response.message, "Profile updated successfully.");
+    } else {
+        CopyToBuffer(response.message, "Profile update failed.");
+    }
+
+    return response;
+}
+
+PacketData HandleDeleteAccount(DatabaseHelper& dbHelper, bool isAuthenticated,
+                               int& sessionUserId, string& sessionUsername,
+                               string& sessionKek, bool& shouldCloseConnection) {
+    PacketData response;
+    InitializePacket(response);
+    response.requestType = REQ_DELETE_ACCOUNT;
+
+    if (!isAuthenticated) {
+        return BuildUnauthorizedResponse(REQ_DELETE_ACCOUNT, "Please login first.");
+    }
+
+    const bool deleted = dbHelper.DeleteUserById(sessionUserId);
+    response.status = deleted ? STATUS_SUCCESS : STATUS_ERROR;
+    CopyToBuffer(response.message, deleted ? "Account deleted successfully." : "Account deletion failed.");
+
+    if (deleted) {
+        sessionUserId = -1;
+        sessionUsername.clear();
+        sessionKek.clear();
+        shouldCloseConnection = true;
+    }
+
+    return response;
+}
+
+PacketData HandleGetTotal(DatabaseHelper& dbHelper) {
+    PacketData response;
+    InitializePacket(response);
+    response.requestType = REQ_GET_TOTAL;
+    response.status = STATUS_SUCCESS;
+    response.recordCount = dbHelper.GetTotalUsers();
+    CopyToBuffer(response.message, "Loaded total users.");
+    return response;
+}
+
+// [GROUP: HandleRequest/Admin]
+
+PacketData HandleAdminListUsers(DatabaseHelper& dbHelper,
+                                bool isAuthenticated,
+                                int sessionRole,
+                                int sessionUserId,
+                                const string& sessionKek,
+                                const PacketData& request) {
+    PacketData response;
+    InitializePacket(response);
+    response.requestType = REQ_ADMIN_LIST_USERS;
+
+    if (!isAuthenticated) {
+        return BuildUnauthorizedResponse(REQ_ADMIN_LIST_USERS, "Please login first.");
+    }
+
+    if (sessionRole != 3) {
+        return BuildUnauthorizedResponse(REQ_ADMIN_LIST_USERS, "Admin role is required.");
+    }
+
+    const int offset = request.recordId < 0 ? 0 : request.recordId;
+    response.recordCount = dbHelper.GetTotalUsers();
+
+    PersonalRecord record;
+    if (!dbHelper.GetEncryptedUserRecordByOffset(offset, record)) {
+        response.status = STATUS_NOTFOUND;
+        CopyToBuffer(response.message, "No more users.");
+        return response;
+    }
+
+    (void)sessionUserId;
+    (void)sessionKek;
+
+    record.cccd = masking::masking_cccd(record.cccd);
+    record.phone = masking::masking_phone(record.phone);
+    record.email = masking::masking_email(record.email);
+
+    response.status = STATUS_SUCCESS;
+    response.dataType = DATATYPE_PLAINTEXT;
+    RecordToPacket(record, response);
+    CopyToBuffer(response.message, "Sensitive fields were masked.");
+    return response;
+}
+
+PacketData HandleAdminViewMyInfo(DatabaseHelper& dbHelper,
+                                 bool isAuthenticated,
+                                 int sessionRole,
+                                 int sessionUserId,
+                                 const string& sessionUsername,
+                                 const PacketData& request) {
+    PacketData response;
+    InitializePacket(response);
+    response.requestType = REQ_ADMIN_VIEW_MY_INFO;
+
+    if (!isAuthenticated) {
+        return BuildUnauthorizedResponse(REQ_ADMIN_VIEW_MY_INFO, "Please login first.");
+    }
+
+    if (sessionRole != 1 && sessionRole != 2 && sessionRole != 3) {
+        return BuildUnauthorizedResponse(REQ_ADMIN_VIEW_MY_INFO, "User, doctor, or admin role is required.");
+    }
+
+    string password = request.password;
+    if (password.empty()) {
+        SecureWipeString(password);
+        response.status = STATUS_ERROR;
+        CopyToBuffer(response.message, "Password is required.");
+        return response;
+    }
+
+    string tempKek;
+    AuthenticatedUser verifiedUser = dbHelper.AuthenticateUser(sessionUsername, password, tempKek);
+    SecureWipeString(password);
+
+    if (!verifiedUser.IsValid() || verifiedUser.id != sessionUserId) {
+        SecureWipeString(tempKek);
+        return BuildUnauthorizedResponse(REQ_ADMIN_VIEW_MY_INFO, "Re-authentication failed.");
+    }
+
+    PersonalRecord record;
+    const bool loaded = dbHelper.GetPersonalRecordForUser(sessionUserId, tempKek, record);
+    SecureWipeString(tempKek);
+
+    if (!loaded) {
+        response.status = STATUS_NOTFOUND;
+        CopyToBuffer(response.message, "Profile record was not found.");
+        return response;
+    }
+
+    response.status = STATUS_SUCCESS;
+    response.dataType = DATATYPE_PLAINTEXT;
+    RecordToPacket(record, response);
+    CopyToBuffer(response.message, "Own profile loaded.");
+    return response;
+}
+
+// [GROUP: HandleRequest/Medical]
+
+PacketData HandleAdminListMedicalRecords(DatabaseHelper& dbHelper,
+                                         bool isAuthenticated,
+                                         int sessionRole,
+                                         const PacketData& request) {
+    PacketData response;
+    InitializePacket(response);
+    response.requestType = REQ_ADMIN_LIST_MEDICAL_RECORDS;
+
+    if (!isAuthenticated) {
+        return BuildUnauthorizedResponse(REQ_ADMIN_LIST_MEDICAL_RECORDS, "Please login first.");
+    }
+
+    if (sessionRole != 3) {
+        return BuildUnauthorizedResponse(REQ_ADMIN_LIST_MEDICAL_RECORDS, "Admin role is required.");
+    }
+
+    const int offset = request.recordId < 0 ? 0 : request.recordId;
+    response.recordCount = dbHelper.GetTotalMedicalRecords();
+
+    MedicalRecordSummary record;
+    if (!dbHelper.GetMedicalRecordSummaryByOffset(offset, record)) {
+        response.status = STATUS_NOTFOUND;
+        CopyToBuffer(response.message, "No more medical records.");
+        return response;
+    }
+
+    record.diagnosisCipher = masking::masking_to_three_star(record.diagnosisCipher);
+    record.prescriptionCipher = masking::masking_to_three_star(record.prescriptionCipher);
+
+    response.status = STATUS_SUCCESS;
+    MedicalSummaryToPacket(record, response);
+    CopyToBuffer(response.message, "Medical records loaded.");
+    return response;
+}
+
+PacketData HandleDoctorListMyMedicalRecords(DatabaseHelper& dbHelper,
+                                            bool isAuthenticated,
+                                            int sessionRole,
+                                            int sessionUserId,
+                                            const PacketData& request) {
+    PacketData response;
+    InitializePacket(response);
+    response.requestType = REQ_DOCTOR_LIST_MY_MEDICAL_RECORDS;
+
+    if (!isAuthenticated) {
+        return BuildUnauthorizedResponse(REQ_DOCTOR_LIST_MY_MEDICAL_RECORDS, "Please login first.");
+    }
+
+    if (sessionRole != 1 && sessionRole != 2) {
+        return BuildUnauthorizedResponse(REQ_DOCTOR_LIST_MY_MEDICAL_RECORDS, "User or doctor role is required.");
+    }
+
+    const int offset = request.recordId < 0 ? 0 : request.recordId;
+    if (sessionRole == 2) {
+        response.recordCount = dbHelper.GetTotalMedicalRecordsForDoctor(sessionUserId);
+    } else {
+        response.recordCount = dbHelper.GetTotalMedicalRecordsForPatient(sessionUserId);
+    }
+
+    MedicalRecordSummary record;
+    bool loaded = false;
+    if (sessionRole == 2) {
+        loaded = dbHelper.GetMedicalRecordSummaryByDoctorOffset(sessionUserId, offset, record);
+    } else {
+        loaded = dbHelper.GetMedicalRecordSummaryByPatientOffset(sessionUserId, offset, record);
+    }
+
+    if (!loaded) {
+        response.status = STATUS_NOTFOUND;
+        CopyToBuffer(response.message, "No more medical records.");
+        return response;
+    }
+
+    record.diagnosisCipher = masking::masking_to_three_star(record.diagnosisCipher);
+    record.prescriptionCipher = masking::masking_to_three_star(record.prescriptionCipher);
+
+    response.status = STATUS_SUCCESS;
+    MedicalSummaryToPacket(record, response);
+    CopyToBuffer(response.message, "Your medical records loaded.");
+    return response;
+}
+
+PacketData HandleDoctorCreateMedicalRecord(DatabaseHelper& dbHelper,
+                                           bool isAuthenticated,
+                                           int sessionRole,
+                                           int sessionUserId,
+                                           const PacketData& request) {
+    PacketData response;
+    InitializePacket(response);
+    response.requestType = REQ_DOCTOR_CREATE_MEDICAL_RECORD;
+
+    if (!isAuthenticated) {
+        return BuildUnauthorizedResponse(REQ_DOCTOR_CREATE_MEDICAL_RECORD, "Please login first.");
+    }
+
+    if (sessionRole != 2) {
+        return BuildUnauthorizedResponse(REQ_DOCTOR_CREATE_MEDICAL_RECORD, "Doctor role is required.");
+    }
+
+    const int patientId = request.userId;
+    const string visitDate = request.username;
+    const string department = request.cccd;
+    const string diagnosisCipher = request.phone;
+    const string prescriptionCipher = request.email;
+
+    if (patientId <= 0 || visitDate.empty() || diagnosisCipher.empty() || prescriptionCipher.empty()) {
+        response.status = STATUS_ERROR;
+        CopyToBuffer(response.message, "Patient id, visit date, diagnosis and prescription are required.");
+        return response;
+    }
+
+    const bool created = dbHelper.CreateMedicalRecord(
+        patientId,
+        sessionUserId,
+        visitDate,
+        department,
+        diagnosisCipher,
+        prescriptionCipher);
+
+    response.status = created ? STATUS_SUCCESS : STATUS_ERROR;
+    CopyToBuffer(response.message, created ? "Medical record created." : "Failed to create medical record.");
+    return response;
+}
+
+PacketData HandleDoctorViewMedicalRecordDetail(DatabaseHelper& dbHelper,
+                                               bool isAuthenticated,
+                                               int sessionRole,
+                                               int sessionUserId,
+                                               const string& sessionUsername,
+                                               const PacketData& request) {
+    PacketData response;
+    InitializePacket(response);
+    response.requestType = REQ_DOCTOR_VIEW_MEDICAL_RECORD_DETAIL;
+
+    if (!isAuthenticated) {
+        return BuildUnauthorizedResponse(REQ_DOCTOR_VIEW_MEDICAL_RECORD_DETAIL, "Please login first.");
+    }
+
+    if (sessionRole != 1 && sessionRole != 2) {
+        return BuildUnauthorizedResponse(REQ_DOCTOR_VIEW_MEDICAL_RECORD_DETAIL, "User or doctor role is required.");
+    }
+
+    const int medicalRecordId = request.recordId;
+    string password = request.password;
+    if (password.empty()) {
+        response.status = STATUS_ERROR;
+        CopyToBuffer(response.message, "Medical record id and password are required.");
+        return response;
+    }
+
+    if (medicalRecordId <= 0) {
+        SecureWipeString(password);
+        response.status = STATUS_ERROR;
+        CopyToBuffer(response.message, "Medical record id and password are required.");
+        return response;
+    }
+
+    string tempKek;
+    AuthenticatedUser verifiedUser = dbHelper.AuthenticateUser(sessionUsername, password, tempKek);
+    SecureWipeString(password);
+
+    if (!verifiedUser.IsValid() || verifiedUser.id != sessionUserId || verifiedUser.role != sessionRole) {
+        SecureWipeString(tempKek);
+        return BuildUnauthorizedResponse(REQ_DOCTOR_VIEW_MEDICAL_RECORD_DETAIL, "Re-authentication failed.");
+    }
+
+    MedicalRecordSummary record;
+    bool loaded = false;
+    if (sessionRole == 2) {
+        loaded = dbHelper.GetMedicalRecordDetailForDoctor(sessionUserId, medicalRecordId, tempKek, record);
+    } else {
+        loaded = dbHelper.GetMedicalRecordDetailForPatient(sessionUserId, medicalRecordId, tempKek, record);
+    }
+    SecureWipeString(tempKek);
+
+    if (!loaded) {
+        response.status = STATUS_NOTFOUND;
+        CopyToBuffer(response.message, "Medical record was not found.");
+        return response;
+    }
+
+    response.status = STATUS_SUCCESS;
+    response.dataType = DATATYPE_PLAINTEXT;
+    MedicalSummaryToPacket(record, response);
+    CopyToBuffer(response.message, "Medical record detail loaded.");
+    return response;
+}
+
+// [GROUP: HandleRequest/Admin]
+
+PacketData HandleAdminDeleteUser(DatabaseHelper& dbHelper,
+                                 bool isAuthenticated,
+                                 int sessionRole,
+                                 int sessionUserId,
+                                 const PacketData& request) {
+    PacketData response;
+    InitializePacket(response);
+    response.requestType = REQ_ADMIN_DELETE_USER;
+
+    if (!isAuthenticated) {
+        return BuildUnauthorizedResponse(REQ_ADMIN_DELETE_USER, "Please login first.");
+    }
+
+    if (sessionRole != 3) {
+        return BuildUnauthorizedResponse(REQ_ADMIN_DELETE_USER, "Admin role is required.");
+    }
+
+    const int targetUserId = request.userId;
+    if (targetUserId <= 0) {
+        response.status = STATUS_ERROR;
+        CopyToBuffer(response.message, "Target user id is invalid.");
+        return response;
+    }
+
+    if (targetUserId == sessionUserId) {
+        response.status = STATUS_ERROR;
+        CopyToBuffer(response.message, "Use Delete Account to remove your own account.");
+        return response;
+    }
+
+    if (!dbHelper.UserExistsById(targetUserId)) {
+        response.status = STATUS_NOTFOUND;
+        CopyToBuffer(response.message, "Target user was not found.");
+        return response;
+    }
+
+    const bool deleted = dbHelper.DeleteUserById(targetUserId);
+    response.status = deleted ? STATUS_SUCCESS : STATUS_ERROR;
+    CopyToBuffer(response.message, deleted ? "User deleted successfully." : "Failed to delete user.");
+    return response;
+}
+
+PacketData HandleAdminUpdateUserRole(DatabaseHelper& dbHelper,
+                                     bool isAuthenticated,
+                                     int sessionRole,
+                                     int sessionUserId,
+                                     const PacketData& request) {
+    PacketData response;
+    InitializePacket(response);
+    response.requestType = REQ_ADMIN_UPDATE_USER_ROLE;
+
+    if (!isAuthenticated) {
+        return BuildUnauthorizedResponse(REQ_ADMIN_UPDATE_USER_ROLE, "Please login first.");
+    }
+
+    if (sessionRole != 3) {
+        return BuildUnauthorizedResponse(REQ_ADMIN_UPDATE_USER_ROLE, "Admin role is required.");
+    }
+
+    const int targetUserId = request.userId;
+    const int targetRole = request.role;
+
+    if (targetUserId <= 0) {
+        response.status = STATUS_ERROR;
+        CopyToBuffer(response.message, "Target user id is invalid.");
+        return response;
+    }
+
+    if (targetRole != 1 && targetRole != 2 && targetRole != 3) {
+        response.status = STATUS_ERROR;
+        CopyToBuffer(response.message, "Role must be 1 (user), 2 (doctor), or 3 (admin).");
+        return response;
+    }
+
+    if (targetUserId == sessionUserId) {
+        response.status = STATUS_ERROR;
+        CopyToBuffer(response.message, "Cannot change role of current login session.");
+        return response;
+    }
+
+    if (!dbHelper.UserExistsById(targetUserId)) {
+        response.status = STATUS_NOTFOUND;
+        CopyToBuffer(response.message, "Target user was not found.");
+        return response;
+    }
+
+    const bool updated = dbHelper.UpdateUserRoleById(targetUserId, targetRole);
+    response.status = updated ? STATUS_SUCCESS : STATUS_ERROR;
+    CopyToBuffer(response.message, updated ? "User role updated successfully." : "Failed to update user role.");
+    return response;
+}
+
+// [GROUP: HandleRequest/Auth]
+
+PacketData HandleLogout(bool& isAuthenticated, int& sessionUserId,
+                        int& sessionRole, string& sessionUsername, string& sessionKek) {
+    PacketData response;
+    InitializePacket(response);
+    response.requestType = REQ_LOGOUT;
+    response.status = STATUS_SUCCESS;
+    CopyToBuffer(response.message, "Logged out.");
+
+    isAuthenticated = false;
+    sessionUserId = -1;
+    sessionRole = 0;
+    sessionUsername.clear();
+    SecureWipeString(sessionKek);
+    return response;
+}
+
+// [GROUP: Request Dispatchers]
+bool TryHandleAuthRequest(DatabaseHelper& dbHelper,
+                          const PacketData& request,
+                          bool& isAuthenticated,
+                          int& sessionUserId,
+                          int& sessionRole,
+                          string& sessionUsername,
+                          string& sessionKek,
+                          bool& shouldCloseConnection,
+                          PacketData& response) {
+    switch (request.requestType) {
+    case REQ_LOGIN:
+        response = HandleLogin(dbHelper, request, isAuthenticated, sessionUserId, sessionRole, sessionUsername, sessionKek);
+        return true;
+    case REQ_LOGOUT:
+        response = HandleLogout(isAuthenticated, sessionUserId, sessionRole, sessionUsername, sessionKek);
+        shouldCloseConnection = true;
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool TryHandleProfileRequest(DatabaseHelper& dbHelper,
+                             const PacketData& request,
+                             bool& isAuthenticated,
+                             int& sessionUserId,
+                             int& sessionRole,
+                             string& sessionUsername,
+                             string& sessionKek,
+                             bool& shouldCloseConnection,
+                             PacketData& response) {
+    switch (request.requestType) {
+    case REQ_FETCH_PROFILE:
+        response = HandleFetchProfile(dbHelper, isAuthenticated, sessionUserId, sessionKek);
+        return true;
+    case REQ_REGISTER:
+        response = HandleRegister(dbHelper, request, isAuthenticated);
+        return true;
+    case REQ_UPDATE_PROFILE:
+        response = HandleUpdateProfile(dbHelper, request, isAuthenticated, sessionUserId, sessionUsername, sessionKek);
+        return true;
+    case REQ_DELETE_ACCOUNT:
+        response = HandleDeleteAccount(dbHelper, isAuthenticated, sessionUserId, sessionUsername, sessionKek, shouldCloseConnection);
+        if (response.status == STATUS_SUCCESS) {
+            isAuthenticated = false;
+            sessionRole = 0;
+        }
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool TryHandleAdminRequest(DatabaseHelper& dbHelper,
+                           const PacketData& request,
+                           bool isAuthenticated,
+                           int sessionRole,
+                           int sessionUserId,
+                           const string& sessionUsername,
+                           const string& sessionKek,
+                           PacketData& response) {
+    switch (request.requestType) {
+    case REQ_GET_TOTAL:
+        response = HandleGetTotal(dbHelper);
+        return true;
+    case REQ_ADMIN_LIST_USERS:
+        response = HandleAdminListUsers(dbHelper, isAuthenticated, sessionRole, sessionUserId, sessionKek, request);
+        return true;
+    case REQ_ADMIN_VIEW_MY_INFO:
+        response = HandleAdminViewMyInfo(dbHelper, isAuthenticated, sessionRole, sessionUserId, sessionUsername, request);
+        return true;
+    case REQ_ADMIN_DELETE_USER:
+        response = HandleAdminDeleteUser(dbHelper, isAuthenticated, sessionRole, sessionUserId, request);
+        return true;
+    case REQ_ADMIN_UPDATE_USER_ROLE:
+        response = HandleAdminUpdateUserRole(dbHelper, isAuthenticated, sessionRole, sessionUserId, request);
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool TryHandleMedicalRequest(DatabaseHelper& dbHelper,
+                             const PacketData& request,
+                             bool isAuthenticated,
+                             int sessionRole,
+                             int sessionUserId,
+                             const string& sessionUsername,
+                             PacketData& response) {
+    switch (request.requestType) {
+    case REQ_ADMIN_LIST_MEDICAL_RECORDS:
+        response = HandleAdminListMedicalRecords(dbHelper, isAuthenticated, sessionRole, request);
+        return true;
+    case REQ_DOCTOR_LIST_MY_MEDICAL_RECORDS:
+        response = HandleDoctorListMyMedicalRecords(dbHelper, isAuthenticated, sessionRole, sessionUserId, request);
+        return true;
+    case REQ_DOCTOR_CREATE_MEDICAL_RECORD:
+        response = HandleDoctorCreateMedicalRecord(dbHelper, isAuthenticated, sessionRole, sessionUserId, request);
+        return true;
+    case REQ_DOCTOR_VIEW_MEDICAL_RECORD_DETAIL:
+        response = HandleDoctorViewMedicalRecordDetail(dbHelper, isAuthenticated, sessionRole, sessionUserId, sessionUsername, request);
+        return true;
+    default:
+        return false;
+    }
+}
+
+void ServeClientSession(SOCKET clientSocket,
+                        const sockaddr_in& clientAddr,
+                        const string& dbHost,
+                        int dbPort,
+                        const string& dbUser,
+                        const string& dbPassword,
+                        const string& dbName,
+                        const string& tlsCertPfxPath,
+                        const string& tlsCertPfxPassword) {
+    char clientIp[INET_ADDRSTRLEN] = {};
+    inet_ntop(AF_INET, &clientAddr.sin_addr, clientIp, sizeof(clientIp));
+    cout << "[SERVER] Client connected from " << clientIp << ":" << ntohs(clientAddr.sin_port) << endl;
+
+    DatabaseHelper dbHelper(dbHost, dbPort, dbUser, dbPassword, dbName);
+    if (!dbHelper.Connect()) {
+        cerr << "[SERVER] Failed to open database connection for client session" << endl;
+        closesocket(clientSocket);
+        return;
+    }
+
+    TlsSocket tlsSocket;
+    string tlsError;
+    if (!tlsSocket.InitializeServer(clientSocket, tlsCertPfxPath, tlsCertPfxPassword, tlsError)) {
+        cerr << "[SERVER] TLS handshake failed: " << tlsError << endl;
+        closesocket(clientSocket);
+        dbHelper.Disconnect();
+        return;
+    }
+
+    bool isAuthenticated = false;
+    int sessionUserId = -1;
+    int sessionRole = 0;
+    string sessionUsername;
+    string sessionKek;
+
+    while (true) {
+        PacketData request;
+        if (!RecvAll(tlsSocket, reinterpret_cast<char*>(&request), sizeof(PacketData))) {
+            cerr << "[SERVER] Receive failed or client disconnected" << endl;
+            break;
+        }
+
+        bool shouldCloseConnection = false;
+        PacketData response;
+        if (request.protocolVersion != PROTOCOL_VERSION) {
+            response = BuildProtocolErrorResponse(request, "Protocol version is not compatible.");
+        } else if (TryHandleAuthRequest(dbHelper, request, isAuthenticated, sessionUserId, sessionRole,
+                                        sessionUsername, sessionKek, shouldCloseConnection, response)) {
+            // handled by auth group
+        } else if (TryHandleProfileRequest(dbHelper, request, isAuthenticated, sessionUserId, sessionRole,
+                                           sessionUsername, sessionKek, shouldCloseConnection, response)) {
+            // handled by profile group
+        } else if (TryHandleAdminRequest(dbHelper, request, isAuthenticated, sessionRole, sessionUserId,
+                                         sessionUsername, sessionKek, response)) {
+            // handled by admin group
+        } else if (TryHandleMedicalRequest(dbHelper, request, isAuthenticated, sessionRole, sessionUserId,
+                                           sessionUsername, response)) {
+            // handled by medical group
+        } else {
+            response = BuildProtocolErrorResponse(request, "Unsupported request type.");
+        }
+
+        if (!SendAll(tlsSocket, reinterpret_cast<const char*>(&response), sizeof(PacketData))) {
+            cerr << "[SERVER] Send failed" << endl;
+            break;
+        }
+
+        if (request.requestType == REQ_LOGOUT || shouldCloseConnection) {
+            break;
+        }
+    }
+
+    SecureWipeString(sessionKek);
+    tlsSocket.Shutdown();
+    closesocket(clientSocket);
+    dbHelper.Disconnect();
+    cout << "[SERVER] Client disconnected from " << clientIp << ":" << ntohs(clientAddr.sin_port) << endl;
+}
+
+}  // namespace
 
 int main() {
     const string dbHost = EnvConfig::GetString("APP_DB_HOST", "127.0.0.1");
@@ -416,6 +899,13 @@ int main() {
     const string dbPassword = EnvConfig::GetString("APP_DB_PASSWORD", "");
     const string dbName = EnvConfig::GetString("APP_DB_NAME", "csatbmtt");
     const int serverPort = EnvConfig::GetInt("APP_SERVER_PORT", 8080);
+    const string tlsCertPfxPath = EnvConfig::GetString("APP_TLS_CERT_PFX_PATH");
+    const string tlsCertPfxPassword = EnvConfig::GetString("APP_TLS_CERT_PFX_PASSWORD");
+
+    if (tlsCertPfxPath.empty()) {
+        cerr << "[SERVER] APP_TLS_CERT_PFX_PATH is required for TLS server startup" << endl;
+        return 1;
+    }
 
     cout << "[SERVER] TCP Server starting on port " << serverPort << "..." << endl;
 
@@ -425,19 +915,25 @@ int main() {
         return 1;
     }
 
-    DatabaseHelper dbHelper(dbHost, dbPort, dbUser, dbPassword, dbName);
-    if (!dbHelper.Connect()) {
+    DatabaseHelper bootstrapDbHelper(dbHost, dbPort, dbUser, dbPassword, dbName);
+    if (!bootstrapDbHelper.Connect()) {
         cerr << "[SERVER] Database connection failed" << endl;
         WSACleanup();
         return 1;
     }
 
-    dbHelper.CreateTableNhanVien();
+    if (!bootstrapDbHelper.InitializeSchema()) {
+        cerr << "[SERVER] Database schema initialization failed" << endl;
+        bootstrapDbHelper.Disconnect();
+        WSACleanup();
+        return 1;
+    }
+
+    bootstrapDbHelper.Disconnect();
 
     SOCKET listenSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (listenSocket == INVALID_SOCKET) {
         cerr << "[SERVER] Failed to create listening socket" << endl;
-        dbHelper.Disconnect();
         WSACleanup();
         return 1;
     }
@@ -450,7 +946,6 @@ int main() {
     if (bind(listenSocket, reinterpret_cast<sockaddr*>(&serverAddr), sizeof(serverAddr)) == SOCKET_ERROR) {
         cerr << "[SERVER] Bind failed on port " << serverPort << endl;
         closesocket(listenSocket);
-        dbHelper.Disconnect();
         WSACleanup();
         return 1;
     }
@@ -458,7 +953,6 @@ int main() {
     if (listen(listenSocket, kBacklog) == SOCKET_ERROR) {
         cerr << "[SERVER] Listen failed" << endl;
         closesocket(listenSocket);
-        dbHelper.Disconnect();
         WSACleanup();
         return 1;
     }
@@ -474,72 +968,21 @@ int main() {
             continue;
         }
 
-        char clientIp[INET_ADDRSTRLEN] = {};
-        inet_ntop(AF_INET, &clientAddr.sin_addr, clientIp, sizeof(clientIp));
-        cout << "[SERVER] Client connected from " << clientIp << ":" << ntohs(clientAddr.sin_port) << endl;
-
-        bool isAuthenticated = false;
-        int sessionRole = ROLE_USER;
-        int sessionUserId = -1;
-
-        while (true) {
-            PacketData request;
-            if (!RecvAll(clientSocket, reinterpret_cast<char*>(&request), sizeof(PacketData))) {
-                cerr << "[SERVER] Receive failed or client disconnected" << endl;
-                break;
-            }
-
-            PacketData response;
-            string error;
-            if (request.protocolVersion != PROTOCOL_VERSION) {
-                response = BuildProtocolErrorResponse(request, "Protocol version khong tuong thich.");
-            } else {
-                switch (request.requestType) {
-                case REQ_LOGIN:
-                    response = HandleLogin(dbHelper, request, isAuthenticated, sessionRole, sessionUserId);
-                    break;
-                case REQ_LIST_EMPLOYEES:
-                    if (!SendEmployeeListResponse(clientSocket, dbHelper, isAuthenticated, sessionRole, error)) {
-                        cerr << "[SERVER] " << error << endl;
-                    }
-                    continue;
-                case REQ_ADD_EMPLOYEE:
-                    response = HandleAddEmployee(dbHelper, request, isAuthenticated, sessionRole);
-                    break;
-                case REQ_UPDATE_EMPLOYEE:
-                    response = HandleUpdateEmployee(dbHelper, request, isAuthenticated, sessionRole);
-                    break;
-                case REQ_DELETE_EMPLOYEE:
-                    response = HandleDeleteEmployee(dbHelper, request, isAuthenticated, sessionRole);
-                    break;
-                case REQ_GET_TOTAL:
-                    response = HandleGetTotal(dbHelper, isAuthenticated);
-                    break;
-                case REQ_LOGOUT:
-                    response = HandleLogout(isAuthenticated, sessionRole, sessionUserId);
-                    break;
-                default:
-                    response = BuildProtocolErrorResponse(request, "Request type khong ho tro.");
-                    break;
-                }
-            }
-
-            if (!SendAll(clientSocket, reinterpret_cast<const char*>(&response), sizeof(PacketData))) {
-                cerr << "[SERVER] Send failed" << endl;
-                break;
-            }
-
-            if (request.requestType == REQ_LOGOUT) {
-                cout << "[SERVER] Client requested logout" << endl;
-                break;
-            }
-        }
-
-        closesocket(clientSocket);
+        std::thread clientThread(
+            ServeClientSession,
+            clientSocket,
+            clientAddr,
+            dbHost,
+            dbPort,
+            dbUser,
+            dbPassword,
+            dbName,
+            tlsCertPfxPath,
+            tlsCertPfxPassword);
+        clientThread.detach();
     }
 
     closesocket(listenSocket);
-    dbHelper.Disconnect();
     WSACleanup();
     return 0;
 }

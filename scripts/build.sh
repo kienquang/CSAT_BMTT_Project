@@ -1,34 +1,31 @@
 #!/bin/bash
-# ======== BUILD SCRIPT FOR CSAT_BMTT_PROJECT (Linux/Mac) ========
+# ======== BUILD SCRIPT FOR PERSONAL RECORD VAULT ========
 
 echo ""
-echo "========== CSAT_BMTT Build System =========="
+echo "========== Personal Record Vault Build =========="
 echo ""
 
-# Kiểm tra CMake
 if ! command -v cmake &> /dev/null; then
     echo "[ERROR] CMake not found! Please install CMake first."
     exit 1
 fi
 
-# Tạo thư mục build
-if [ ! -d "build" ]; then
-    echo "[*] Creating build directory..."
-    mkdir build
+if [ ! -d "Build" ]; then
+    echo "[*] Creating Build directory..."
+    mkdir Build
 fi
 
-cd build
+cd Build
 
-# Generate build files
-echo "[*] Generating build files..."
-cmake .. -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release
-
-if [ $? -ne 0 ]; then
-    echo "[ERROR] CMake generation failed!"
-    exit 1
+if [ ! -f "CMakeCache.txt" ]; then
+    echo "[*] Configuring project..."
+    cmake .. -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DBUILD_QT_GUI=ON
+    if [ $? -ne 0 ]; then
+        echo "[ERROR] CMake configure failed!"
+        exit 1
+    fi
 fi
 
-# Build project
 echo "[*] Building project..."
 cmake --build . --config Release
 
@@ -41,7 +38,6 @@ echo ""
 echo "[SUCCESS] Build completed successfully!"
 echo ""
 echo "Output files:"
-echo "  - Server: ./bin/Server"
-echo "  - Client: ./bin/Client"
-echo "  - TestMasking: ./bin/TestMasking"
+echo "  - Server: ./bin/Release/Server"
+echo "  - GUI:    ./bin/Release/CSATApp"
 echo ""

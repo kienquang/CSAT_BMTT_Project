@@ -1,21 +1,73 @@
 #include "LoginDialog.h"
-#include <QVBoxLayout>
+
+#include "EmployeeDialog.h"
+#include "../network/NetworkClient.h"
+#include "../../core/EnvConfig.h"
+
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMessageBox>
-#include <iostream>
-#include "../../core/EnvConfig.h"
-#include "../network/NetworkClient.h"
+#include <QVBoxLayout>
+#include <QFont>
 
-LoginDialog::LoginDialog(QWidget *parent)
-    : QDialog(parent), 
-      loginResult{false, "", -1, "", nullptr}
-{
+namespace {
+
+bool IsDigitsOnly(const QString& value) {
+    if (value.isEmpty()) {
+        return false;
+    }
+
+    for (const QChar ch : value) {
+        if (!ch.isDigit()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ValidateRecordData(const EmployeeDialog::RecordData& data, QString& error) {
+    if (data.username.isEmpty()) {
+        error = "Username cannot be empty.";
+        return false;
+    }
+
+    if (data.name.isEmpty()) {
+        error = "Full name cannot be empty.";
+        return false;
+    }
+
+    if (data.password.length() < 8) {
+        error = "Password must be at least 8 characters.";
+        return false;
+    }
+
+    if (data.cccd.length() != 12 || !IsDigitsOnly(data.cccd)) {
+        error = "CCCD must contain exactly 12 digits.";
+        return false;
+    }
+
+    if (data.phone.length() < 10 || !IsDigitsOnly(data.phone)) {
+        error = "Phone must contain at least 10 digits.";
+        return false;
+    }
+
+    if (!data.email.contains('@') || !data.email.contains('.')) {
+        error = "Email format is invalid.";
+        return false;
+    }
+
+    return true;
+}
+
+}  // namespace
+
+LoginDialog::LoginDialog(QWidget* parent)
+    : QDialog(parent) {
     setWindowTitle("CSAT_BMTT - Login");
     setModal(true);
-    setMinimumWidth(400);
+    setMinimumWidth(420);
     setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
-    
+
     setupUi();
 
     networkClient = std::make_shared<NetworkClient>();
@@ -31,111 +83,155 @@ LoginDialog::LoginDialog(QWidget *parent)
     }
 }
 
-LoginDialog::~LoginDialog() {}
+LoginDialog::~LoginDialog() {
+}
 
 void LoginDialog::setupUi() {
-    QVBoxLayout *mainLayout = new QVBoxLayout(this);
-    
-    // Title
-    QLabel *titleLabel = new QLabel("CSAT_BMTT Employee Management System");
-    titleLabel->setStyleSheet("font-size: 14px; font-weight: bold; color: #34495e;");
+    setFont(QFont("Segoe UI", 10));
+
+    QVBoxLayout* mainLayout = new QVBoxLayout(this);
+    mainLayout->setContentsMargins(22, 22, 22, 22);
+    mainLayout->setSpacing(10);
+
+    QLabel* titleLabel = new QLabel("CSAT_BMTT Personal Record Vault");
+    titleLabel->setObjectName("loginTitleLabel");
     mainLayout->addWidget(titleLabel);
-    
-    mainLayout->addSpacing(20);
-    
-    // CCCD
-    mainLayout->addWidget(new QLabel("CCCD (12 digits):"));
-    cccdEdit = new QLineEdit;
-    cccdEdit->setPlaceholderText("Enter your CCCD");
-    mainLayout->addWidget(cccdEdit);
-    
-    // Password
+    mainLayout->addSpacing(8);
+
+    mainLayout->addWidget(new QLabel("Username:"));
+    usernameEdit = new QLineEdit;
+    usernameEdit->setPlaceholderText("Enter your username");
+    mainLayout->addWidget(usernameEdit);
+
     mainLayout->addWidget(new QLabel("Password:"));
     passwordEdit = new QLineEdit;
     passwordEdit->setPlaceholderText("Enter your password");
     passwordEdit->setEchoMode(QLineEdit::Password);
     mainLayout->addWidget(passwordEdit);
-    
+
     mainLayout->addSpacing(20);
-    
-    // Buttons
-    QHBoxLayout *btnLayout = new QHBoxLayout;
+
+    QHBoxLayout* buttonLayout = new QHBoxLayout;
     loginBtn = new QPushButton("Login");
+    registerBtn = new QPushButton("Register");
     cancelBtn = new QPushButton("Exit");
+    loginBtn->setObjectName("loginBtn");
+    registerBtn->setObjectName("registerBtn");
+    cancelBtn->setObjectName("exitBtn");
     loginBtn->setMinimumHeight(35);
+    registerBtn->setMinimumHeight(35);
     cancelBtn->setMinimumHeight(35);
-    btnLayout->addWidget(loginBtn);
-    btnLayout->addWidget(cancelBtn);
-    mainLayout->addLayout(btnLayout);
-    
+    buttonLayout->addWidget(loginBtn);
+    buttonLayout->addWidget(registerBtn);
+    buttonLayout->addWidget(cancelBtn);
+    mainLayout->addLayout(buttonLayout);
+
     setLayout(mainLayout);
-    
-    // Connect signals
+
+    setStyleSheet(
+        "QDialog { background-color: #eef7f8; color: #17363e; }"
+        "QLabel { color: #2d4a53; font-weight: 600; }"
+        "QLabel#loginTitleLabel { color: #0f3f47; font-size: 20px; font-weight: 800; }"
+        "QLineEdit { background-color: #ffffff; border: 1px solid #bad6db; border-radius: 8px; padding: 8px 10px; }"
+        "QLineEdit:focus { border: 1px solid #1f8b99; }"
+        "QPushButton { border: none; border-radius: 8px; padding: 8px 12px; color: white; font-weight: 700; }"
+        "QPushButton#loginBtn { background-color: #1f8b99; }"
+        "QPushButton#loginBtn:hover { background-color: #1b7884; }"
+        "QPushButton#registerBtn { background-color: #2d9d6f; }"
+        "QPushButton#registerBtn:hover { background-color: #26855e; }"
+        "QPushButton#exitBtn { background-color: #c95c54; }"
+        "QPushButton#exitBtn:hover { background-color: #b15049; }");
+
     connect(loginBtn, &QPushButton::clicked, this, &LoginDialog::onLoginClicked);
+    connect(registerBtn, &QPushButton::clicked, this, &LoginDialog::onRegisterClicked);
     connect(cancelBtn, &QPushButton::clicked, this, &LoginDialog::onCancelClicked);
-    
-    // Allow Enter key to login
     connect(passwordEdit, &QLineEdit::returnPressed, this, &LoginDialog::onLoginClicked);
 }
 
 void LoginDialog::onLoginClicked() {
-    QString cccd = cccdEdit->text().trimmed();
-    QString password = passwordEdit->text();
-    
-    // Validate input
-    if (cccd.isEmpty()) {
-        QMessageBox::warning(this, "Validation Error", "Please enter your CCCD!");
-        cccdEdit->setFocus();
+    const QString username = usernameEdit->text().trimmed();
+    const QString password = passwordEdit->text();
+
+    if (username.isEmpty()) {
+        QMessageBox::warning(this, "Validation Error", "Please enter your username.");
+        usernameEdit->setFocus();
         return;
     }
-    
-    if (cccd.length() != 12 || !cccd.toLongLong(nullptr, 10)) {
-        QMessageBox::warning(this, "Validation Error", "CCCD must be 12 digits!");
-        return;
-    }
-    
+
     if (password.isEmpty()) {
-        QMessageBox::warning(this, "Validation Error", "Please enter your password!");
+        QMessageBox::warning(this, "Validation Error", "Please enter your password.");
         passwordEdit->setFocus();
         return;
     }
-    
+
     if (!networkClient || !networkClient->IsConnected()) {
-        QMessageBox::critical(this, "Error", "Server is not connected!");
+        QMessageBox::critical(this, "Error", "Server is not connected.");
         return;
     }
-    
-    try {
-        NetworkClient::LoginResult result;
-        std::string error;
-        if (!networkClient->Login(cccd.toStdString(), password.toStdString(), result, error)) {
-            QMessageBox::critical(this, "Error",
-                                  QString("Login request failed: %1").arg(QString::fromStdString(error)));
-            return;
-        }
 
-        if (result.success) {
-            loginResult.success = true;
-            loginResult.userRole = QString::fromStdString(result.userRole);
-            loginResult.userId = result.userId;
-            loginResult.userName = QString::fromStdString(result.userName);
-            loginResult.networkClient = networkClient;
-            accept();
-        } else {
-            QMessageBox::warning(this, "Login Failed", 
-                QString::fromStdString(result.message));
-            cccdEdit->clear();
-            passwordEdit->clear();
-            cccdEdit->setFocus();
-        }
-        
-    } catch (const std::exception& e) {
+    NetworkClient::LoginResult result;
+    std::string error;
+    if (!networkClient->Login(username.toStdString(), password.toStdString(), result, error)) {
         QMessageBox::critical(this, "Error",
-                              QString("Login error: %1").arg(e.what()));
+                              QString("Login request failed: %1").arg(QString::fromStdString(error)));
+        return;
     }
+
+    if (!result.success) {
+        QMessageBox::warning(this, "Login Failed", QString::fromStdString(result.message));
+        passwordEdit->clear();
+        passwordEdit->setFocus();
+        return;
+    }
+
+    loginResult.success = true;
+    loginResult.userId = result.userId;
+    loginResult.role = result.role;
+    loginResult.username = QString::fromStdString(result.username);
+    loginResult.networkClient = networkClient;
+    accept();
+}
+
+void LoginDialog::onRegisterClicked() {
+    if (!networkClient || !networkClient->IsConnected()) {
+        QMessageBox::critical(this, "Error", "Server is not connected.");
+        return;
+    }
+
+    EmployeeDialog dialog(EmployeeDialog::RegisterMode, this);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    const EmployeeDialog::RecordData data = dialog.getRecordData();
+    QString validationError;
+    if (!ValidateRecordData(data, validationError)) {
+        QMessageBox::warning(this, "Validation Error", validationError);
+        return;
+    }
+
+    PersonalRecord record;
+    record.username = data.username.toStdString();
+    record.name = data.name.toStdString();
+    record.gender = data.gender;
+    record.cccd = data.cccd.toStdString();
+    record.phone = data.phone.toStdString();
+    record.email = data.email.toStdString();
+
+    std::string error;
+    if (!networkClient->Register(record, data.password.toStdString(), error)) {
+        QMessageBox::critical(this, "Registration Failed",
+                              QString::fromStdString(error));
+        return;
+    }
+
+    QMessageBox::information(this, "Registration Successful",
+                             "Your account has been created. You can login now.");
+    usernameEdit->setText(data.username);
+    passwordEdit->setText(data.password);
 }
 
 void LoginDialog::onCancelClicked() {
-    loginResult = {false, "", -1, "", nullptr};
+    loginResult = LoginResult{};
     reject();
 }

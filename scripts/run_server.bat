@@ -1,7 +1,7 @@
 @echo off
 REM ======== RUN SERVER ========
 
-set SERVER_PATH=.\build\bin\Server.exe
+set SERVER_PATH=.\Build\bin\Release\Server.exe
 
 if not exist "%SERVER_PATH%" (
     echo [ERROR] Server.exe not found at %SERVER_PATH%
@@ -17,13 +17,3 @@ echo Server executable: %SERVER_PATH%
 echo.
 
 "%SERVER_PATH%"
-
-if %ERRORLEVEL% EQU 0 (
-    echo.
-    echo [SUCCESS] Server ran successfully
-) else (
-    echo.
-    echo [ERROR] Server exited with error code %ERRORLEVEL%
-)
-
-pause

@@ -5,8 +5,9 @@
 
 class EnvConfig {
 public:
+    // [GROUP: Public API]
     static std::string GetString(const std::string& key, const std::string& defaultValue = "");
     static int GetInt(const std::string& key, int defaultValue);
 };
 
-#endif // ENV_CONFIG_H
+#endif  // ENV_CONFIG_H
